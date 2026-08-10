@@ -229,7 +229,7 @@ export default function App() {
   }[worstLevel];
 
   return (
-    <div dir="rtl" className="flex h-[100dvh] flex-col overflow-hidden bg-zinc-100 font-body text-zinc-900">
+    <div dir="rtl" className="flex h-full flex-col overflow-hidden bg-zinc-100 font-body text-zinc-900">
       {/* Header: board rating + reset + overload alert. A plain flex item
           (not scrolled, not sticky) — the page body below is the only
           scrollable region, so there's nothing for it to scroll past. */}
@@ -282,7 +282,7 @@ export default function App() {
       {/* The only scrollable region on the page — bounded to the leftover
           space below the header, so it only scrolls when content actually
           overflows it (no phantom scroll when the board is nearly empty). */}
-      <div className="min-h-0 flex-1 overflow-y-auto overscroll-none">
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-none [-webkit-overflow-scrolling:touch]">
         <div className="mx-auto max-w-md px-4 pb-[calc(env(safe-area-inset-bottom)+6rem)] pt-4">
         {threePhaseDevices.length > 0 && (
           <div className="mb-3 rounded-2xl border-2 border-red-200 bg-white p-4">
@@ -391,7 +391,7 @@ export default function App() {
               </button>
             </div>
 
-            <div className="min-h-0 flex-1 overflow-y-auto overscroll-none px-4 pb-4 pt-3">
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-none [-webkit-overflow-scrolling:touch] px-4 pb-4 pt-3">
               {/* Mode tabs */}
               <div className="mb-3 flex overflow-hidden rounded-2xl border-2 border-zinc-900">
                 <button

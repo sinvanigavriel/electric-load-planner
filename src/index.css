@@ -2,16 +2,26 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Pin html/body to the viewport instead of relying on overscroll-behavior
+   (unsupported on iOS Safari before 16.4) — this is what actually stops
+   the whole page from bouncing/scrolling on older iOS PWAs. Only the
+   dedicated scroll regions inside the app (see App.jsx) can move. */
 html,
-body,
+body {
+  position: fixed;
+  inset: 0;
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
 #root {
   height: 100%;
-  overscroll-behavior: none;
+  overflow: hidden;
 }
 
 body {
   margin: 0;
-  overflow: hidden;
   font-family: "Heebo", system-ui, sans-serif;
   -webkit-tap-highlight-color: transparent;
 }
