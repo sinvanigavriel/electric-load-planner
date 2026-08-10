@@ -1,0 +1,539 @@
+// Electric Load Planner — field tool for splitting generator load across
+// 32A/63A distribution boxes without tripping breakers.
+//
+// Layout: a single scrolling page (comfortable spacing, no cramped UI).
+// A compact live status strip is pinned in the sticky header, so the
+// box's per-phase load is visible at all times — even while scrolling
+// through the device picker or the detailed dashboard further down.
+//
+// Electrical model:
+// - One 3-phase main board rated 32A or 63A (the generator cable feeding it).
+// - 3 single-phase legs (L1 brown / L2 orange / L3 black), each leg has a
+//   16A MCB feeding a group of regular 230V sockets.
+// - Optional 32A 3-phase (red, 5-pin) sockets draw equally from all 3 legs
+//   at once, on top of whatever each leg is already carrying.
+// - A leg overloads if: its 16A socket group is exceeded, OR its total load
+//   (16A group + share of any 3-phase devices) exceeds the board rating.
+
+import React, { useState, useRef, useEffect } from "react";
+import {
+  Fan,
+  Flame,
+  Coffee,
+  Droplets,
+  Utensils,
+  UtensilsCrossed,
+  Refrigerator,
+  Speaker,
+  Wind,
+  Lightbulb,
+  Monitor,
+  Plug,
+  Plus,
+  Minus,
+  Trash2,
+  CheckCircle2,
+  AlertTriangle,
+  RotateCcw,
+  ListChecks,
+} from "lucide-react";
+
+const VOLTAGE = 230;
+
+const PRESET_CATEGORIES = [
+  {
+    label: "אוורור וחימום",
+    items: [
+      { name: "מאוורר תעשייתי", watts: 690, Icon: Fan },
+      { name: "תנור חימום פטריה", watts: 2760, Icon: Flame },
+    ],
+  },
+  {
+    label: "מטבח וקייטרינג",
+    items: [
+      { name: "צ'יפסר כפול", watts: 3000, Icon: Utensils },
+      { name: "מיחם מים מסחרי", watts: 2500, Icon: Droplets },
+      { name: "מכונת קפה", watts: 2000, Icon: Coffee },
+      { name: "מחמם מזון / פלטה", watts: 1500, Icon: UtensilsCrossed },
+      { name: "מקרר / מקפיא", watts: 800, Icon: Refrigerator },
+    ],
+  },
+  {
+    label: "במה, תאורה והגברה",
+    items: [
+      { name: "ארון מגברים", watts: 3000, Icon: Speaker },
+      { name: "מכונת עשן", watts: 1500, Icon: Wind },
+      { name: "פנס ראש נע", watts: 500, Icon: Lightbulb },
+      { name: "מסך לדים", watts: 300, Icon: Monitor },
+    ],
+  },
+];
+
+const PHASE_STYLE = {
+  1: { chipBg: "bg-cable-brown", dot: "bg-cable-brown", bar: "bg-cable-brown", label: "פאזה 1", sub: "כבל חום", short: "L1" },
+  2: { chipBg: "bg-cable-orange", dot: "bg-cable-orange", bar: "bg-cable-orange", label: "פאזה 2", sub: "כבל כתום", short: "L2" },
+  3: { chipBg: "bg-cable-black", dot: "bg-cable-black", bar: "bg-cable-black", label: "פאזה 3", sub: "כבל שחור", short: "L3" },
+};
+const THREE_PHASE_STYLE = { chipBg: "bg-cable-red", dot: "bg-cable-red", bar: "bg-cable-red", label: "תלת פאזי", sub: "שקע אדום 32A", short: "3F" };
+
+const wattsToAmps = (w) => w / VOLTAGE;
+const fmt = (n) => (Math.round(n * 10) / 10).toFixed(1);
+const genId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+function phaseTotals(devices) {
+  const totals = { 1: { group16: 0, threePhase: 0 }, 2: { group16: 0, threePhase: 0 }, 3: { group16: 0, threePhase: 0 } };
+  devices.forEach((d) => {
+    if (d.phase === "3phase") {
+      totals[1].threePhase += d.amps;
+      totals[2].threePhase += d.amps;
+      totals[3].threePhase += d.amps;
+    } else {
+      totals[d.phase].group16 += d.amps;
+    }
+  });
+  [1, 2, 3].forEach((p) => {
+    totals[p].total = totals[p].group16 + totals[p].threePhase;
+  });
+  return totals;
+}
+
+function evaluateAddition(devices, boxMax, phase, totalRequested) {
+  const totals = phaseTotals(devices);
+  if (phase === "3phase") {
+    for (const p of [1, 2, 3]) {
+      const newTotal = totals[p].total + totalRequested;
+      if (newTotal > boxMax) {
+        return { ok: false, reason: `פאזה ${p} תעבור את מגבלת הלוח (${fmt(newTotal)}A מתוך ${boxMax}A)` };
+      }
+    }
+    const minRemaining = Math.min(...[1, 2, 3].map((p) => boxMax - totals[p].total - totalRequested));
+    return { ok: true, note: `לכל פאזה יישארו לפחות ${fmt(minRemaining)}A` };
+  }
+  const t = totals[phase];
+  const newGroup16 = t.group16 + totalRequested;
+  const newTotal = t.total + totalRequested;
+  if (newGroup16 > 16) {
+    return { ok: false, reason: `יעבור את המבטח 16A של קבוצת השקעים (${fmt(newGroup16)}A)` };
+  }
+  if (newTotal > boxMax) {
+    return { ok: false, reason: `יעבור את מגבלת הלוח בפאזה זו (${fmt(newTotal)}A מתוך ${boxMax}A)` };
+  }
+  return { ok: true, note: `יישארו ${fmt(16 - newGroup16)}A בקבוצה, ${fmt(boxMax - newTotal)}A בפאזה` };
+}
+
+export default function App() {
+  const [boxMax, setBoxMax] = useState(32);
+  const [devices, setDevices] = useState([]);
+
+  const [mode, setMode] = useState("preset"); // "preset" | "custom"
+  const [presetCat, setPresetCat] = useState(0);
+  const [selectedPreset, setSelectedPreset] = useState(null);
+  const [customValue, setCustomValue] = useState("");
+  const [customUnit, setCustomUnit] = useState("W"); // W | kW | A
+  const [customName, setCustomName] = useState("");
+  const [qty, setQty] = useState(1);
+  const [targetPhase, setTargetPhase] = useState("1");
+
+  const [confirmReset, setConfirmReset] = useState(false);
+  const resetTimer = useRef(null);
+  useEffect(() => () => clearTimeout(resetTimer.current), []);
+
+  let singleAmps = 0;
+  let deviceName = "";
+  let hasSelection = false;
+
+  if (mode === "preset" && selectedPreset) {
+    singleAmps = wattsToAmps(selectedPreset.watts);
+    deviceName = selectedPreset.name;
+    hasSelection = true;
+  } else if (mode === "custom") {
+    const v = parseFloat(customValue);
+    if (v > 0) {
+      if (customUnit === "W") singleAmps = v / VOLTAGE;
+      if (customUnit === "kW") singleAmps = (v * 1000) / VOLTAGE;
+      if (customUnit === "A") singleAmps = v;
+      deviceName = customName.trim() || "עומס מותאם אישית";
+      hasSelection = true;
+    }
+  }
+
+  const totalRequested = singleAmps * qty;
+  const evaluation = hasSelection ? evaluateAddition(devices, boxMax, targetPhase, totalRequested) : null;
+  const canAdd = hasSelection && evaluation?.ok;
+
+  function handleAdd() {
+    if (!canAdd) return;
+    const newOnes = Array.from({ length: qty }, () => ({
+      id: genId(),
+      name: deviceName,
+      amps: singleAmps,
+      phase: targetPhase,
+    }));
+    setDevices((prev) => [...prev, ...newOnes]);
+    setSelectedPreset(null);
+    setCustomValue("");
+    setCustomName("");
+    setQty(1);
+  }
+
+  function removeDevice(id) {
+    setDevices((prev) => prev.filter((d) => d.id !== id));
+  }
+
+  function handleResetClick() {
+    if (!confirmReset) {
+      setConfirmReset(true);
+      resetTimer.current = setTimeout(() => setConfirmReset(false), 3000);
+      return;
+    }
+    clearTimeout(resetTimer.current);
+    setConfirmReset(false);
+    setDevices([]);
+  }
+
+  const totals = phaseTotals(devices);
+  const threePhaseDevices = devices.filter((d) => d.phase === "3phase");
+
+  const worstLevel = (() => {
+    let level = "ok";
+    [1, 2, 3].forEach((p) => {
+      const t = totals[p];
+      if (t.total > boxMax || t.group16 > 16) level = "over";
+      else if (level !== "over" && (t.total > boxMax * 0.85 || t.group16 > 16 * 0.85)) level = "warn";
+    });
+    return level;
+  })();
+
+  const masterBanner = {
+    ok: { cls: "bg-emerald-600", Icon: CheckCircle2, text: "כל הפאזות תקינות" },
+    warn: { cls: "bg-amber-500", Icon: AlertTriangle, text: "קרוב לגבול — שימו לב" },
+    over: { cls: "bg-red-600", Icon: AlertTriangle, text: "עומס יתר בלוח!" },
+  }[worstLevel];
+
+  return (
+    <div dir="rtl" className="min-h-screen bg-zinc-100 font-body text-zinc-900">
+      {/* Sticky header: board rating + reset + always-on status strip */}
+      <div className="sticky top-0 z-20 border-b-4 border-zinc-900 bg-white/95 backdrop-blur">
+        <div className="mx-auto flex max-w-md items-center gap-3 px-4 py-3">
+          <div className="flex items-center gap-2 font-display text-lg font-black">
+            <Plug className="h-6 w-6" />
+            <span>עומסי חשמל</span>
+          </div>
+          <div className="mr-auto flex overflow-hidden rounded-xl border-2 border-zinc-900">
+            {[32, 63].map((v) => (
+              <button
+                key={v}
+                onClick={() => setBoxMax(v)}
+                className={`px-4 py-2 font-display text-base font-black transition ${
+                  boxMax === v ? "bg-zinc-900 text-white" : "bg-white text-zinc-900"
+                }`}
+              >
+                {v}A
+              </button>
+            ))}
+          </div>
+          <button
+            onClick={handleResetClick}
+            className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border-2 transition ${
+              confirmReset ? "border-red-600 bg-red-600 text-white" : "border-zinc-300 bg-white text-zinc-500"
+            }`}
+            aria-label="לוח חדש"
+            title="לוח חדש"
+          >
+            <RotateCcw className="h-5 w-5" />
+          </button>
+        </div>
+
+        {/* Compact live status — stays visible the whole time, page scrolls under it */}
+        <div className="mx-auto grid max-w-md grid-cols-3 gap-1.5 px-4 pb-3">
+          {[1, 2, 3].map((p) => {
+            const s = PHASE_STYLE[p];
+            const t = totals[p];
+            const g16Over = t.group16 > 16;
+            const totOver = t.total > boxMax;
+            const bad = g16Over || totOver;
+            return (
+              <div key={p} className={`rounded-lg border-2 px-2 py-1.5 ${bad ? "border-red-400 bg-red-50" : "border-zinc-200 bg-zinc-50"}`}>
+                <div className="flex items-center justify-between">
+                  <span className="flex items-center gap-1 font-display text-xs font-black">
+                    <span className={`h-2 w-2 rounded-full ${s.dot}`} />
+                    {s.short}
+                  </span>
+                  <span className={`font-body text-xs font-bold ${bad ? "text-red-600" : "text-zinc-500"}`}>{fmt(t.total)}/{boxMax}A</span>
+                </div>
+                <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-zinc-200">
+                  <div className={`h-full rounded-full ${totOver ? "bg-red-600" : s.bar}`} style={{ width: `${Math.min((t.total / boxMax) * 100, 100)}%` }} />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {confirmReset && (
+          <div className="bg-red-600 py-1.5 text-center font-body text-sm font-bold text-white">
+            לחצו שוב כדי לנקות את כל הציוד מהלוח
+          </div>
+        )}
+      </div>
+
+      <div className="mx-auto max-w-md px-4 pb-40 pt-4">
+        {/* Mode tabs */}
+        <div className="mb-3 flex overflow-hidden rounded-2xl border-2 border-zinc-900">
+          <button
+            onClick={() => setMode("preset")}
+            className={`flex-1 py-3 font-display text-base font-black transition ${
+              mode === "preset" ? "bg-zinc-900 text-white" : "bg-white text-zinc-500"
+            }`}
+          >
+            ציוד מהרשימה
+          </button>
+          <button
+            onClick={() => setMode("custom")}
+            className={`flex-1 py-3 font-display text-base font-black transition ${
+              mode === "custom" ? "bg-zinc-900 text-white" : "bg-white text-zinc-500"
+            }`}
+          >
+            עומס מותאם
+          </button>
+        </div>
+
+        {/* Preset grid */}
+        {mode === "preset" && (
+          <div className="mb-4 rounded-2xl border-2 border-zinc-200 bg-white p-3">
+            <div className="mb-3 flex gap-1.5">
+              {PRESET_CATEGORIES.map((cat, i) => (
+                <button
+                  key={cat.label}
+                  onClick={() => setPresetCat(i)}
+                  className={`flex-1 rounded-lg py-2 font-body text-xs font-bold transition ${
+                    presetCat === i ? "bg-zinc-900 text-white" : "bg-zinc-100 text-zinc-500"
+                  }`}
+                >
+                  {cat.label}
+                </button>
+              ))}
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              {PRESET_CATEGORIES[presetCat].items.map((item) => {
+                const selected = selectedPreset?.name === item.name;
+                const amps = wattsToAmps(item.watts);
+                const Icon = item.Icon;
+                return (
+                  <button
+                    key={item.name}
+                    onClick={() => setSelectedPreset(selected ? null : item)}
+                    className={`relative flex min-h-20 flex-col items-center justify-center gap-1 rounded-xl border-2 p-2 text-center transition ${
+                      selected ? "border-zinc-900 bg-zinc-900 text-white" : "border-zinc-200 bg-zinc-50 text-zinc-800"
+                    }`}
+                  >
+                    {selected && <CheckCircle2 className="absolute right-1 top-1 h-4 w-4" />}
+                    <Icon className="h-6 w-6" />
+                    <span className="font-body text-xs font-bold leading-tight">{item.name}</span>
+                    <span className={`font-body text-xs ${selected ? "text-zinc-300" : "text-zinc-400"}`}>{fmt(amps)}A</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Custom entry */}
+        {mode === "custom" && (
+          <div className="mb-4 rounded-2xl border-2 border-zinc-200 bg-white p-4">
+            <input
+              type="number"
+              inputMode="decimal"
+              value={customValue}
+              onChange={(e) => setCustomValue(e.target.value)}
+              placeholder="0"
+              className="mb-3 w-full rounded-xl border-2 border-zinc-200 bg-zinc-50 p-4 text-center font-display text-3xl font-black text-zinc-900 focus:border-zinc-900 focus:outline-none"
+            />
+            <div className="mb-3 flex overflow-hidden rounded-xl border-2 border-zinc-900">
+              {["W", "kW", "A"].map((u) => (
+                <button
+                  key={u}
+                  onClick={() => setCustomUnit(u)}
+                  className={`flex-1 py-2 font-display font-bold transition ${
+                    customUnit === u ? "bg-zinc-900 text-white" : "bg-white text-zinc-600"
+                  }`}
+                >
+                  {u}
+                </button>
+              ))}
+            </div>
+            <input
+              type="text"
+              value={customName}
+              onChange={(e) => setCustomName(e.target.value)}
+              placeholder="שם הציוד (לא חובה)"
+              className="w-full rounded-xl border-2 border-zinc-200 bg-zinc-50 p-3 font-body text-base focus:border-zinc-900 focus:outline-none"
+            />
+          </div>
+        )}
+
+        {/* Quantity + target socket — only once something is picked */}
+        {hasSelection && (
+          <>
+            <div className="mb-4 flex items-center justify-between rounded-2xl border-2 border-zinc-200 bg-white p-3">
+              <span className="font-display text-base font-bold text-zinc-700">כמות יחידות</span>
+              <div className="flex items-center gap-4">
+                <button
+                  onClick={() => setQty((q) => Math.max(1, q - 1))}
+                  className="flex h-12 w-12 items-center justify-center rounded-xl bg-zinc-100 text-zinc-900 active:bg-zinc-200"
+                >
+                  <Minus className="h-5 w-5" />
+                </button>
+                <span className="w-8 text-center font-display text-2xl font-black">{qty}</span>
+                <button
+                  onClick={() => setQty((q) => Math.min(50, q + 1))}
+                  className="flex h-12 w-12 items-center justify-center rounded-xl bg-zinc-100 text-zinc-900 active:bg-zinc-200"
+                >
+                  <Plus className="h-5 w-5" />
+                </button>
+              </div>
+            </div>
+
+            <div className="mb-4">
+              <div className="mb-2 font-display text-sm font-bold text-zinc-600">לאיזה שקע מתחברים?</div>
+              <div className="mb-2 grid grid-cols-3 gap-2">
+                {[1, 2, 3].map((p) => {
+                  const s = PHASE_STYLE[p];
+                  const selected = targetPhase === String(p);
+                  return (
+                    <button
+                      key={p}
+                      onClick={() => setTargetPhase(String(p))}
+                      className={`rounded-xl py-4 text-center font-display text-white transition ${s.chipBg} ${
+                        selected ? "ring-4 ring-zinc-900 ring-offset-2" : "opacity-80"
+                      }`}
+                    >
+                      <div className="text-base font-black">{s.label}</div>
+                      <div className="text-xs">{s.sub}</div>
+                    </button>
+                  );
+                })}
+              </div>
+              <button
+                onClick={() => setTargetPhase("3phase")}
+                className={`w-full rounded-xl py-4 text-center font-display text-white transition ${THREE_PHASE_STYLE.chipBg} ${
+                  targetPhase === "3phase" ? "ring-4 ring-zinc-900 ring-offset-2" : "opacity-80"
+                }`}
+              >
+                <div className="text-base font-black">{THREE_PHASE_STYLE.label}</div>
+                <div className="text-xs">{THREE_PHASE_STYLE.sub}</div>
+              </button>
+            </div>
+          </>
+        )}
+
+        {/* Detailed dashboard */}
+        <div className={`mb-4 flex items-center gap-2 rounded-2xl px-4 py-3 font-display font-bold text-white ${masterBanner.cls}`}>
+          <masterBanner.Icon className="h-5 w-5 shrink-0" />
+          <span>{masterBanner.text}</span>
+        </div>
+
+        {threePhaseDevices.length > 0 && (
+          <div className="mb-3 rounded-2xl border-2 border-red-200 bg-white p-4">
+            <div className="mb-2 flex items-center gap-2 font-display text-sm font-black text-red-600">
+              <span className={`h-2.5 w-2.5 rounded-full ${THREE_PHASE_STYLE.dot}`} />
+              שקעים תלת-פאזיים · מוסיפים לכל 3 הפאזות
+            </div>
+            {threePhaseDevices.map((d) => (
+              <div key={d.id} className="mb-1.5 flex items-center justify-between rounded-xl bg-zinc-50 px-3 py-2 last:mb-0">
+                <div className="font-body text-sm font-bold">
+                  {d.name} <span className="font-normal text-zinc-500">· {fmt(d.amps)}A</span>
+                </div>
+                <button onClick={() => removeDevice(d.id)} className="rounded-lg bg-zinc-200 p-1.5 text-zinc-600 active:bg-red-600 active:text-white">
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {[1, 2, 3].map((p) => {
+          const s = PHASE_STYLE[p];
+          const t = totals[p];
+          const group16Pct = Math.min((t.group16 / 16) * 100, 100);
+          const totalPct = Math.min((t.total / boxMax) * 100, 100);
+          const group16Over = t.group16 > 16;
+          const totalOver = t.total > boxMax;
+          const phaseDevices = devices.filter((d) => d.phase === String(p));
+
+          return (
+            <div key={p} className="mb-3 overflow-hidden rounded-2xl border-2 border-zinc-200 bg-white">
+              <div className={`h-2 ${s.bar}`} />
+              <div className="p-4">
+                <div className="mb-3 flex items-center justify-between">
+                  <div className="flex items-center gap-2 font-display text-base font-black">
+                    <span className={`h-3 w-3 rounded-full ${s.dot}`} />
+                    {s.label} <span className="font-normal text-zinc-400">· {s.sub}</span>
+                  </div>
+                  <div className="rounded-lg bg-zinc-100 px-2 py-1 font-display text-sm font-black">{fmt(t.total)}A</div>
+                </div>
+
+                <div className="mb-1 flex justify-between font-body text-xs font-bold text-zinc-500">
+                  <span>שקעים רגילים (16A)</span>
+                  <span>{fmt(t.group16)} / 16A</span>
+                </div>
+                <div className="mb-3 h-3 w-full overflow-hidden rounded-full bg-zinc-100">
+                  <div className={`h-full rounded-full ${group16Over ? "bg-red-600" : s.bar}`} style={{ width: `${group16Pct}%` }} />
+                </div>
+
+                <div className="mb-1 flex justify-between font-body text-xs font-bold text-zinc-500">
+                  <span>סה"כ פאזה</span>
+                  <span>{fmt(t.total)} / {boxMax}A</span>
+                </div>
+                <div className="mb-3 h-3 w-full overflow-hidden rounded-full bg-zinc-100">
+                  <div className={`h-full rounded-full ${totalOver ? "bg-red-600" : s.bar}`} style={{ width: `${totalPct}%` }} />
+                </div>
+
+                {phaseDevices.length > 0 && (
+                  <div className="space-y-1.5">
+                    {phaseDevices.map((d) => (
+                      <div key={d.id} className="flex items-center justify-between rounded-xl bg-zinc-50 px-3 py-2">
+                        <div className="font-body text-sm font-bold">
+                          {d.name} <span className="font-normal text-zinc-500">· {fmt(d.amps)}A</span>
+                        </div>
+                        <button onClick={() => removeDevice(d.id)} className="rounded-lg bg-zinc-200 p-1.5 text-zinc-600 active:bg-red-600 active:text-white">
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })}
+
+        {devices.length === 0 && (
+          <div className="flex flex-col items-center gap-2 rounded-2xl border-2 border-dashed border-zinc-300 py-10 text-zinc-400">
+            <ListChecks className="h-8 w-8" />
+            <span className="font-body text-sm font-bold">עדיין לא חובר ציוד ללוח</span>
+          </div>
+        )}
+      </div>
+
+      {/* Sticky footer: status + add button */}
+      <div className="fixed inset-x-0 bottom-0 z-20 border-t-4 border-zinc-900 bg-white px-4 pb-4 pt-2 shadow-2xl">
+        <div className="mx-auto max-w-md">
+          {hasSelection && (
+            <div className={`mb-2 rounded-xl px-3 py-2 text-center font-body text-sm font-bold ${evaluation.ok ? "bg-emerald-50 text-emerald-700" : "bg-red-50 text-red-700"}`}>
+              {evaluation.ok ? evaluation.note : `✕ ${evaluation.reason}`}
+            </div>
+          )}
+          <button
+            onClick={handleAdd}
+            disabled={!canAdd}
+            className={`w-full rounded-2xl py-4 text-center font-display text-xl font-black text-white transition ${
+              canAdd ? "bg-zinc-900 active:scale-[0.98]" : "bg-zinc-300"
+            }`}
+          >
+            {hasSelection ? `חבר · ${fmt(totalRequested)}A` : "בחרו ציוד לחיבור"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
