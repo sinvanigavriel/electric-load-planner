@@ -229,11 +229,11 @@ export default function App() {
   }[worstLevel];
 
   return (
-    <div dir="rtl" className="min-h-screen bg-zinc-100 font-body text-zinc-900">
-      {/* Sticky header: board rating + reset + overload alert.
-          Stays visible (and usable) even while the add-equipment sheet is
-          open — the sheet is bounded to the space below it, see headerRef. */}
-      <div ref={headerRef} className="sticky top-0 z-20 border-b-4 border-zinc-900 bg-white/95 pt-[env(safe-area-inset-top)] backdrop-blur">
+    <div dir="rtl" className="flex h-[100dvh] flex-col overflow-hidden bg-zinc-100 font-body text-zinc-900">
+      {/* Header: board rating + reset + overload alert. A plain flex item
+          (not scrolled, not sticky) — the page body below is the only
+          scrollable region, so there's nothing for it to scroll past. */}
+      <div ref={headerRef} className="shrink-0 border-b-4 border-zinc-900 bg-white pt-[env(safe-area-inset-top)]">
         <div className="mx-auto flex max-w-md items-center gap-3 px-4 py-3">
           <div className="flex items-center gap-2 font-display text-lg font-black">
             <Plug className="h-6 w-6" />
@@ -279,7 +279,11 @@ export default function App() {
         )}
       </div>
 
-      <div className="mx-auto max-w-md px-4 pb-[calc(env(safe-area-inset-bottom)+6rem)] pt-4">
+      {/* The only scrollable region on the page — bounded to the leftover
+          space below the header, so it only scrolls when content actually
+          overflows it (no phantom scroll when the board is nearly empty). */}
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-none">
+        <div className="mx-auto max-w-md px-4 pb-[calc(env(safe-area-inset-bottom)+6rem)] pt-4">
         {threePhaseDevices.length > 0 && (
           <div className="mb-3 rounded-2xl border-2 border-red-200 bg-white p-4">
             <div className="mb-2 flex items-center gap-2 font-display text-sm font-black text-red-600">
@@ -356,6 +360,7 @@ export default function App() {
             </div>
           );
         })}
+        </div>
       </div>
 
       {/* Floating action button — opens the add-equipment sheet */}
@@ -386,7 +391,7 @@ export default function App() {
               </button>
             </div>
 
-            <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4 pt-3">
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-none px-4 pb-4 pt-3">
               {/* Mode tabs */}
               <div className="mb-3 flex overflow-hidden rounded-2xl border-2 border-zinc-900">
                 <button
