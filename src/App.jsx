@@ -213,7 +213,7 @@ export default function App() {
   return (
     <div dir="rtl" className="min-h-screen bg-zinc-100 font-body text-zinc-900">
       {/* Sticky header: board rating + reset + always-on status strip */}
-      <div className="sticky top-0 z-20 border-b-4 border-zinc-900 bg-white/95 backdrop-blur">
+      <div className="sticky top-0 z-20 border-b-4 border-zinc-900 bg-white/95 pt-[env(safe-area-inset-top)] backdrop-blur">
         <div className="mx-auto flex max-w-md items-center gap-3 px-4 py-3">
           <div className="flex items-center gap-2 font-display text-lg font-black">
             <Plug className="h-6 w-6" />
@@ -516,7 +516,7 @@ export default function App() {
       </div>
 
       {/* Sticky footer: status + add button */}
-      <div className="fixed inset-x-0 bottom-0 z-20 border-t-4 border-zinc-900 bg-white px-4 pb-4 pt-2 shadow-2xl">
+      <div className="fixed inset-x-0 bottom-0 z-20 border-t-4 border-zinc-900 bg-white px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-2 shadow-2xl">
         <div className="mx-auto max-w-md">
           {hasSelection && (
             <div className={`mb-2 rounded-xl px-3 py-2 text-center font-body text-sm font-bold ${evaluation.ok ? "bg-emerald-50 text-emerald-700" : "bg-red-50 text-red-700"}`}>
