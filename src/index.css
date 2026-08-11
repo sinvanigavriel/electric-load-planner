@@ -5,12 +5,17 @@
 /* Pin html/body to the viewport instead of relying on overscroll-behavior
    (unsupported on iOS Safari before 16.4) — this is what actually stops
    the whole page from bouncing/scrolling on older iOS PWAs. Only the
-   dedicated scroll regions inside the app (see App.jsx) can move. */
+   dedicated scroll regions inside the app (see App.jsx) can move.
+   inset: 0 alone fully determines the box for a fixed element — no
+   height:100% needed, and none added, to avoid chaining percentage-height
+   calculations (html -> body -> #root -> app root) that can round
+   differently across browsers/zoom levels and leave a stray 1px of
+   "real" overflow. App.jsx's root element also anchors directly via
+   fixed/inset-0 for the same reason, rather than height:100% of #root. */
 html,
 body {
   position: fixed;
   inset: 0;
-  height: 100%;
   overflow: hidden;
   overscroll-behavior: none;
 }
