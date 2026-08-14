@@ -157,25 +157,36 @@ export default function App() {
   }, []);
 
   let singleAmps = 0;
+  let isPowerBased = true; // true: derived from W/kW (nameplate = total power). false: entered directly in A.
   let deviceName = "";
   let hasSelection = false;
 
   if (mode === "preset" && selectedPreset) {
     singleAmps = wattsToAmps(selectedPreset.watts);
+    isPowerBased = true;
     deviceName = selectedPreset.name;
     hasSelection = true;
   } else if (mode === "custom") {
     const v = parseFloat(customValue);
     if (v > 0) {
-      if (customUnit === "W") singleAmps = v / VOLTAGE;
-      if (customUnit === "kW") singleAmps = (v * 1000) / VOLTAGE;
-      if (customUnit === "A") singleAmps = v;
+      if (customUnit === "W") { singleAmps = v / VOLTAGE; isPowerBased = true; }
+      if (customUnit === "kW") { singleAmps = (v * 1000) / VOLTAGE; isPowerBased = true; }
+      if (customUnit === "A") { singleAmps = v; isPowerBased = false; }
       deviceName = customName.trim() || "עומס מותאם אישית";
       hasSelection = true;
     }
   }
 
-  const totalRequested = singleAmps * qty;
+  // Amps actually drawn from each phase leg once connected:
+  // - Single leg (L1/L2/L3): the full singleAmps value.
+  // - 3-phase socket: a W/kW rating is the device's TOTAL power (standard
+  //   nameplate convention), split evenly across all 3 legs — so each leg
+  //   only carries a third of the single-phase-equivalent figure. An A
+  //   rating on 3-phase gear is conventionally already per-line (e.g. a
+  //   "32A 5-pin plug" carries 32A on each pin), so it's used as-is.
+  const perPhaseAmps = targetPhase === "3phase" && isPowerBased ? singleAmps / 3 : singleAmps;
+
+  const totalRequested = perPhaseAmps * qty;
   const evaluation = hasSelection && targetPhase ? evaluateAddition(devices, boxMax, targetPhase, totalRequested) : null;
   const canAdd = hasSelection && targetPhase && evaluation?.ok;
 
@@ -184,7 +195,7 @@ export default function App() {
     const newOnes = Array.from({ length: qty }, () => ({
       id: genId(),
       name: deviceName,
-      amps: singleAmps,
+      amps: perPhaseAmps,
       phase: targetPhase,
     }));
     setDevices((prev) => [...prev, ...newOnes]);
