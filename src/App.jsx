@@ -374,9 +374,9 @@ export default function App() {
           space below the header, so it only scrolls when content actually
           overflows it (no phantom scroll when the board is nearly empty). */}
       <main className="min-h-0 flex-1 overflow-y-auto overscroll-none">
-        <div className="mx-auto max-w-md px-4 pb-4 pt-4">
+        <div className="mx-auto max-w-md px-4 pb-2 pt-4">
         {threePhaseDevices.length > 0 && (
-          <div className="mb-3 rounded-2xl border-2 border-red-200 bg-white p-4">
+          <div className="mb-2 rounded-2xl border-2 border-red-200 bg-white p-4">
             <div className="mb-2 flex items-center gap-2 font-display text-sm font-black text-red-600">
               <span className={`h-2.5 w-2.5 rounded-full ${THREE_PHASE_STYLE.dot}`} />
               שקעים תלת-פאזיים · מוסיפים לכל 3 הפאזות
@@ -404,7 +404,7 @@ export default function App() {
           const phaseDevices = devices.filter((d) => d.phase === String(p));
 
           return (
-            <div key={p} className="mb-3 overflow-hidden rounded-2xl border-2 border-zinc-200 bg-white">
+            <div key={p} className="mb-2 overflow-hidden rounded-2xl border-2 border-zinc-200 bg-white">
               <div className={`h-2 ${s.bar}`} />
               <div className="p-4">
                 <div className="mb-3 flex items-center justify-between">
