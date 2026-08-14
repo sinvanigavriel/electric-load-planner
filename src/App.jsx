@@ -123,6 +123,85 @@ function evaluateAddition(devices, boxMax, phase, totalRequested) {
   return { ok: true, note: `יישארו ${fmt(16 - newGroup16)}A בקבוצה, ${fmt(boxMax - newTotal)}A בפאזה` };
 }
 
+// TEMPORARY diagnostic overlay — remove once the iOS phantom-scroll bug is
+// found. Shows the same scrollHeight/clientHeight numbers a Safari Web
+// Inspector session would, directly on-device, since a Mac isn't available
+// to connect one. Read-only, click-through (pointerEvents: none).
+function DebugOverlay() {
+  const [info, setInfo] = useState(null);
+
+  useEffect(() => {
+    const probe = document.createElement("div");
+    probe.style.cssText = "position:fixed;visibility:hidden;pointer-events:none;";
+    probe.style.paddingTop = "env(safe-area-inset-top, -1px)";
+    probe.style.paddingBottom = "env(safe-area-inset-bottom, -1px)";
+    document.body.appendChild(probe);
+
+    const update = () => {
+      const main = document.querySelector("main");
+      const cs = getComputedStyle(probe);
+      setInfo({
+        html: [document.documentElement.scrollHeight, document.documentElement.clientHeight],
+        body: [document.body.scrollHeight, document.body.clientHeight],
+        main: main ? [main.scrollHeight, main.clientHeight] : null,
+        innerHeight: window.innerHeight,
+        vvHeight: window.visualViewport ? Math.round(window.visualViewport.height) : null,
+        dpr: window.devicePixelRatio,
+        safeTop: parseFloat(cs.paddingTop),
+        safeBottom: parseFloat(cs.paddingBottom),
+      });
+    };
+
+    update();
+    const id = setInterval(update, 800);
+    window.addEventListener("resize", update);
+    window.visualViewport?.addEventListener("resize", update);
+    return () => {
+      clearInterval(id);
+      window.removeEventListener("resize", update);
+      window.visualViewport?.removeEventListener("resize", update);
+      probe.remove();
+    };
+  }, []);
+
+  if (!info) return null;
+  const line = (label, [scroll, client]) => {
+    const over = scroll > client;
+    return `${label}: ${scroll}/${client}${over ? " ⚠OVERFLOW" : ""}`;
+  };
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        top: 0,
+        insetInline: 0,
+        zIndex: 9999,
+        pointerEvents: "none",
+        background: "rgba(0,0,0,0.85)",
+        color: "#4ade80",
+        fontFamily: "monospace",
+        fontSize: 10,
+        lineHeight: 1.4,
+        padding: "4px 6px",
+        direction: "ltr",
+        textAlign: "left",
+        whiteSpace: "pre",
+      }}
+    >
+      {line("html", info.html)}
+      {"\n"}
+      {line("body", info.body)}
+      {"\n"}
+      {info.main ? line("main", info.main) : "main: not found"}
+      {"\n"}
+      {`innerH:${info.innerHeight} vvH:${info.vvHeight} dpr:${info.dpr}`}
+      {"\n"}
+      {`safe-top:${info.safeTop} safe-bottom:${info.safeBottom}`}
+    </div>
+  );
+}
+
 export default function App() {
   const [boxMax, setBoxMax] = useState(32);
   const [devices, setDevices] = useState([]);
@@ -241,6 +320,7 @@ export default function App() {
 
   return (
     <div dir="rtl" className="h-[100dvh] flex flex-col overflow-hidden bg-zinc-100 font-body text-zinc-900">
+      <DebugOverlay />
       {/* Header: board rating + reset + overload alert. A plain flex item
           (not scrolled, not sticky) — the page body below is the only
           scrollable region, so there's nothing for it to scroll past. */}
@@ -293,7 +373,7 @@ export default function App() {
       {/* The only scrollable region on the page — bounded to the leftover
           space below the header, so it only scrolls when content actually
           overflows it (no phantom scroll when the board is nearly empty). */}
-      <div className="min-h-0 flex-1 overflow-y-auto overscroll-none [-webkit-overflow-scrolling:touch]">
+      <main className="min-h-0 flex-1 overflow-y-auto overscroll-none">
         <div className="mx-auto max-w-md px-4 pb-4 pt-4">
         {threePhaseDevices.length > 0 && (
           <div className="mb-3 rounded-2xl border-2 border-red-200 bg-white p-4">
@@ -372,7 +452,7 @@ export default function App() {
           );
         })}
         </div>
-      </div>
+      </main>
 
       {/* Bottom bar: opens the add-equipment sheet. A fixed part of the
           page layout (shrink-0, like the header) rather than a button
@@ -407,7 +487,7 @@ export default function App() {
               </button>
             </div>
 
-            <div className="min-h-0 flex-1 overflow-y-auto overscroll-none [-webkit-overflow-scrolling:touch] px-4 pb-4 pt-3">
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-none px-4 pb-4 pt-3">
               {/* Mode tabs */}
               <div className="mb-3 flex overflow-hidden rounded-2xl border-2 border-zinc-900">
                 <button
