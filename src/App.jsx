@@ -240,7 +240,7 @@ export default function App() {
   }[worstLevel];
 
   return (
-    <div dir="rtl" className="fixed inset-0 flex flex-col overflow-hidden bg-zinc-100 font-body text-zinc-900">
+    <div dir="rtl" className="fixed inset-x-0 top-0 h-[100dvh] flex flex-col overflow-hidden bg-zinc-100 font-body text-zinc-900">
       {/* Header: board rating + reset + overload alert. A plain flex item
           (not scrolled, not sticky) — the page body below is the only
           scrollable region, so there's nothing for it to scroll past. */}
