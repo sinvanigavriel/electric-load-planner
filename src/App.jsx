@@ -378,15 +378,15 @@ export default function App() {
           page layout (shrink-0, like the header) rather than a button
           floating over content — the card list above is flex-sized to
           leave exactly this much room, so it can never cover a card. */}
-      <div className="shrink-0 border-t-4 border-zinc-900 bg-white px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-3">
+      <div className="shrink-0 border-t-2 border-zinc-900 bg-white px-4 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] pt-2">
         <button
           onClick={() => {
             setTargetPhase(null);
             setShowAddModal(true);
           }}
-          className="mx-auto flex w-full max-w-md items-center justify-center gap-2 rounded-2xl bg-zinc-900 py-4 font-display text-lg font-black text-white transition active:scale-[0.98]"
+          className="mx-auto flex w-full max-w-md items-center justify-center gap-2 rounded-xl bg-zinc-900 py-3 font-display text-base font-black text-white transition active:scale-[0.98]"
         >
-          <Plus className="h-6 w-6" />
+          <Plus className="h-5 w-5" />
           הוספת ציוד
         </button>
       </div>
