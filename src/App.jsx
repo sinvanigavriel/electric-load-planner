@@ -156,6 +156,28 @@ export default function App() {
     return () => ro.disconnect();
   }, []);
 
+  // The floating "+" button needs clearance below the last card so it
+  // doesn't cover it — but only once the card list is already tall enough
+  // to scroll. Reserving that clearance unconditionally (a fixed
+  // padding-bottom) makes the page "scrollable" by that amount even when
+  // the board is empty, which is exactly the phantom-scroll bug. So this
+  // measures the cards' natural height against the available space and
+  // only turns the clearance on when it's actually needed.
+  const scrollRef = useRef(null);
+  const cardsRef = useRef(null);
+  const [needsFabClearance, setNeedsFabClearance] = useState(false);
+  useEffect(() => {
+    const scrollEl = scrollRef.current;
+    const cardsEl = cardsRef.current;
+    if (!scrollEl || !cardsEl) return;
+    const check = () => setNeedsFabClearance(cardsEl.scrollHeight > scrollEl.clientHeight);
+    check();
+    const ro = new ResizeObserver(check);
+    ro.observe(scrollEl);
+    ro.observe(cardsEl);
+    return () => ro.disconnect();
+  }, [devices, boxMax]);
+
   let singleAmps = 0;
   let isPowerBased = true; // true: derived from W/kW (nameplate = total power). false: entered directly in A.
   let deviceName = "";
@@ -293,8 +315,9 @@ export default function App() {
       {/* The only scrollable region on the page — bounded to the leftover
           space below the header, so it only scrolls when content actually
           overflows it (no phantom scroll when the board is nearly empty). */}
-      <div className="min-h-0 flex-1 overflow-y-auto overscroll-none [-webkit-overflow-scrolling:touch]">
-        <div className="mx-auto max-w-md px-4 pb-[calc(env(safe-area-inset-bottom)+6rem)] pt-4">
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto overscroll-none [-webkit-overflow-scrolling:touch]">
+        <div className="mx-auto max-w-md px-4 pb-4 pt-4">
+        <div ref={cardsRef}>
         {threePhaseDevices.length > 0 && (
           <div className="mb-3 rounded-2xl border-2 border-red-200 bg-white p-4">
             <div className="mb-2 flex items-center gap-2 font-display text-sm font-black text-red-600">
@@ -371,6 +394,8 @@ export default function App() {
             </div>
           );
         })}
+        </div>
+        {needsFabClearance && <div style={{ height: "calc(env(safe-area-inset-bottom) + 5rem)" }} />}
         </div>
       </div>
 
