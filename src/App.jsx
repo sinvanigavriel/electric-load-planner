@@ -376,7 +376,7 @@ export default function App() {
       <main className="min-h-0 flex-1 overflow-y-auto overscroll-none">
         <div className="mx-auto max-w-md px-4 pb-2 pt-4">
         {threePhaseDevices.length > 0 && (
-          <div className="mb-2 rounded-2xl border-2 border-red-200 bg-white p-4">
+          <div className="mb-2 rounded-2xl border-2 border-red-200 bg-white px-4 py-3">
             <div className="mb-2 flex items-center gap-2 font-display text-sm font-black text-red-600">
               <span className={`h-2.5 w-2.5 rounded-full ${THREE_PHASE_STYLE.dot}`} />
               שקעים תלת-פאזיים · מוסיפים לכל 3 הפאזות
@@ -406,7 +406,7 @@ export default function App() {
           return (
             <div key={p} className="mb-2 overflow-hidden rounded-2xl border-2 border-zinc-200 bg-white">
               <div className={`h-2 ${s.bar}`} />
-              <div className="p-4">
+              <div className="px-4 py-3">
                 <div className="mb-3 flex items-center justify-between">
                   <div className="flex items-center gap-2 font-display text-base font-black">
                     <span className={`h-3 w-3 rounded-full ${s.dot}`} />
@@ -458,7 +458,7 @@ export default function App() {
           page layout (shrink-0, like the header) rather than a button
           floating over content — the card list above is flex-sized to
           leave exactly this much room, so it can never cover a card. */}
-      <div className="shrink-0 border-t-2 border-zinc-900 bg-white px-4 pb-[calc(1rem+env(safe-area-inset-bottom,0px))] pt-4">
+      <div className="shrink-0 border-t-2 border-zinc-900 bg-white px-4 pb-[calc(0.5rem+env(safe-area-inset-bottom,0px))] pt-4">
         <button
           onClick={() => {
             setTargetPhase(null);
@@ -640,7 +640,7 @@ export default function App() {
               )}
             </div>
 
-            <div className="shrink-0 border-t-2 border-zinc-900 bg-white px-4 pb-[calc(1rem+env(safe-area-inset-bottom,0px))] pt-4">
+            <div className="shrink-0 border-t-2 border-zinc-900 bg-white px-4 pb-[calc(0.5rem+env(safe-area-inset-bottom,0px))] pt-4">
               {hasSelection && !targetPhase && (
                 <div className="mb-2 rounded-xl bg-zinc-100 px-3 py-2 text-center font-body text-sm font-bold text-zinc-500">
                   בחרו לאיזה שקע מתחברים
