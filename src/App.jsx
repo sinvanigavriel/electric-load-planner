@@ -156,28 +156,6 @@ export default function App() {
     return () => ro.disconnect();
   }, []);
 
-  // The floating "+" button needs clearance below the last card so it
-  // doesn't cover it — but only once the card list is already tall enough
-  // to scroll. Reserving that clearance unconditionally (a fixed
-  // padding-bottom) makes the page "scrollable" by that amount even when
-  // the board is empty, which is exactly the phantom-scroll bug. So this
-  // measures the cards' natural height against the available space and
-  // only turns the clearance on when it's actually needed.
-  const scrollRef = useRef(null);
-  const cardsRef = useRef(null);
-  const [needsFabClearance, setNeedsFabClearance] = useState(false);
-  useEffect(() => {
-    const scrollEl = scrollRef.current;
-    const cardsEl = cardsRef.current;
-    if (!scrollEl || !cardsEl) return;
-    const check = () => setNeedsFabClearance(cardsEl.scrollHeight > scrollEl.clientHeight);
-    check();
-    const ro = new ResizeObserver(check);
-    ro.observe(scrollEl);
-    ro.observe(cardsEl);
-    return () => ro.disconnect();
-  }, [devices, boxMax]);
-
   let singleAmps = 0;
   let isPowerBased = true; // true: derived from W/kW (nameplate = total power). false: entered directly in A.
   let deviceName = "";
@@ -315,9 +293,8 @@ export default function App() {
       {/* The only scrollable region on the page — bounded to the leftover
           space below the header, so it only scrolls when content actually
           overflows it (no phantom scroll when the board is nearly empty). */}
-      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto overscroll-none [-webkit-overflow-scrolling:touch]">
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-none [-webkit-overflow-scrolling:touch]">
         <div className="mx-auto max-w-md px-4 pb-4 pt-4">
-        <div ref={cardsRef}>
         {threePhaseDevices.length > 0 && (
           <div className="mb-3 rounded-2xl border-2 border-red-200 bg-white p-4">
             <div className="mb-2 flex items-center gap-2 font-display text-sm font-black text-red-600">
@@ -395,21 +372,24 @@ export default function App() {
           );
         })}
         </div>
-        {needsFabClearance && <div style={{ height: "calc(env(safe-area-inset-bottom) + 5rem)" }} />}
-        </div>
       </div>
 
-      {/* Floating action button — opens the add-equipment sheet */}
-      <button
-        onClick={() => {
-          setTargetPhase(null);
-          setShowAddModal(true);
-        }}
-        className="fixed bottom-[calc(env(safe-area-inset-bottom)+1.5rem)] end-6 z-20 flex h-16 w-16 items-center justify-center rounded-full bg-zinc-900 text-white shadow-2xl transition active:scale-95"
-        aria-label="הוספת ציוד"
-      >
-        <Plus className="h-8 w-8" />
-      </button>
+      {/* Bottom bar: opens the add-equipment sheet. A fixed part of the
+          page layout (shrink-0, like the header) rather than a button
+          floating over content — the card list above is flex-sized to
+          leave exactly this much room, so it can never cover a card. */}
+      <div className="shrink-0 border-t-4 border-zinc-900 bg-white px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-3">
+        <button
+          onClick={() => {
+            setTargetPhase(null);
+            setShowAddModal(true);
+          }}
+          className="mx-auto flex w-full max-w-md items-center justify-center gap-2 rounded-2xl bg-zinc-900 py-4 font-display text-lg font-black text-white transition active:scale-[0.98]"
+        >
+          <Plus className="h-6 w-6" />
+          הוספת ציוד
+        </button>
+      </div>
 
       {/* Add-equipment bottom sheet — bounded to the area below the header */}
       {showAddModal && (
