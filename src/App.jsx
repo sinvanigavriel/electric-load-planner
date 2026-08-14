@@ -304,7 +304,7 @@ export default function App() {
             {threePhaseDevices.map((d) => (
               <div key={d.id} className="mb-1.5 flex items-center justify-between rounded-xl bg-zinc-50 px-3 py-2 last:mb-0">
                 <div className="font-body text-sm font-bold">
-                  {d.name} <span className="font-normal text-zinc-500">· {fmt(d.amps)}A</span>
+                  {d.name} <span className="font-normal text-zinc-500">· {fmt(d.amps)}A לכל פאזה</span>
                 </div>
                 <button onClick={() => removeDevice(d.id)} className="rounded-lg bg-zinc-200 p-1.5 text-zinc-600 active:bg-red-600 active:text-white">
                   <Trash2 className="h-4 w-4" />
