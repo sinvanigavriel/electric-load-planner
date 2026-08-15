@@ -137,6 +137,15 @@ function DebugOverlay() {
     probe.style.paddingBottom = "env(safe-area-inset-bottom, -1px)";
     document.body.appendChild(probe);
 
+    // Directly measures what 100dvh (driving the whole app's height) really
+    // resolves to, independent of window.innerHeight — if these two numbers
+    // ever disagree, or both disagree with screen.height, that's proof
+    // window.innerHeight itself (which everything above is measured
+    // against) is the thing under-reporting, not our layout.
+    const dvhProbe = document.createElement("div");
+    dvhProbe.style.cssText = "position:fixed;top:0;left:0;width:1px;height:100dvh;visibility:hidden;pointer-events:none;";
+    document.body.appendChild(dvhProbe);
+
     const update = () => {
       const main = document.querySelector("main");
       const appRoot = document.getElementById("root")?.firstElementChild;
@@ -165,6 +174,9 @@ function DebugOverlay() {
         btnBottom: btnBottom != null ? Math.round(btnBottom) : null,
         expectedBtnBottom: Math.round(expectedBtnBottom),
         extraGap: btnBottom != null ? Math.round(expectedBtnBottom - btnBottom) : null,
+        dvhPx: Math.round(dvhProbe.getBoundingClientRect().height),
+        screenHeight: window.screen ? window.screen.height : null,
+        screenAvailHeight: window.screen ? window.screen.availHeight : null,
       });
     };
 
@@ -177,6 +189,7 @@ function DebugOverlay() {
       window.removeEventListener("resize", update);
       window.visualViewport?.removeEventListener("resize", update);
       probe.remove();
+      dvhProbe.remove();
     };
   }, []);
 
@@ -220,6 +233,8 @@ function DebugOverlay() {
       {`bar top:${info.barTop} bottom:${info.barBottom} gapBelowBar:${info.barBottom != null ? info.innerHeight - info.barBottom : "?"}`}
       {"\n"}
       {`btnBottom:${info.btnBottom} expected:${info.expectedBtnBottom} extraGap:${info.extraGap}`}
+      {"\n"}
+      {`100dvh=${info.dvhPx}px screen.h=${info.screenHeight} avail=${info.screenAvailHeight}`}
     </div>
   );
 }
