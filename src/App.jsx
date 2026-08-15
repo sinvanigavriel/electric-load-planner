@@ -458,7 +458,7 @@ export default function App() {
           page layout (shrink-0, like the header) rather than a button
           floating over content — the card list above is flex-sized to
           leave exactly this much room, so it can never cover a card. */}
-      <div className="shrink-0 border-t-2 border-zinc-900 bg-white px-4 pb-[calc(0.5rem+env(safe-area-inset-bottom,0px))] pt-4">
+      <div className="shrink-0 border-t-2 border-zinc-900 bg-white px-4 pb-[max(0.5rem,env(safe-area-inset-bottom,0px))] pt-2">
         <button
           onClick={() => {
             setTargetPhase(null);
@@ -640,7 +640,7 @@ export default function App() {
               )}
             </div>
 
-            <div className="shrink-0 border-t-2 border-zinc-900 bg-white px-4 pb-[calc(0.5rem+env(safe-area-inset-bottom,0px))] pt-4">
+            <div className="shrink-0 border-t-2 border-zinc-900 bg-white px-4 pb-[max(0.5rem,env(safe-area-inset-bottom,0px))] pt-2">
               {hasSelection && !targetPhase && (
                 <div className="mb-2 rounded-xl bg-zinc-100 px-3 py-2 text-center font-body text-sm font-bold text-zinc-500">
                   בחרו לאיזה שקע מתחברים
