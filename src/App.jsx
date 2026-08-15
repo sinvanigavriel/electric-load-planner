@@ -246,6 +246,23 @@ export default function App() {
     return () => ro.disconnect();
   }, []);
 
+  // The bottom bar is genuinely position:fixed (not a flex-flow child) so
+  // it uses iOS's standard, best-tested safe-area pattern — bottom:0 +
+  // padding-bottom:env(safe-area-inset-bottom) on a truly fixed element,
+  // instead of the flex-shrink-child approach that measured correctly but
+  // visibly mispainted on real iOS PWA. Since it's out of flow, main needs
+  // its own bottom clearance reserved, measured the same way headerHeight
+  // is, so it's always exactly the bar's real height, never a guess.
+  const bottomBarRef = useRef(null);
+  const [bottomBarHeight, setBottomBarHeight] = useState(0);
+  useEffect(() => {
+    const el = bottomBarRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver((entries) => setBottomBarHeight(entries[0].contentRect.height));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
   let singleAmps = 0;
   let isPowerBased = true; // true: derived from W/kW (nameplate = total power). false: entered directly in A.
   let deviceName = "";
@@ -385,7 +402,7 @@ export default function App() {
           space below the header, so it only scrolls when content actually
           overflows it (no phantom scroll when the board is nearly empty). */}
       <main className="min-h-0 flex-1 overflow-y-auto overscroll-none">
-        <div className="mx-auto max-w-md px-4 pb-2 pt-4">
+        <div className="mx-auto max-w-md px-4 pt-4" style={{ paddingBottom: bottomBarHeight + 8 }}>
         {threePhaseDevices.length > 0 && (
           <div className="mb-2 rounded-2xl border-2 border-red-200 bg-white px-4 py-3">
             <div className="mb-2 flex items-center gap-2 font-display text-sm font-black text-red-600">
@@ -465,14 +482,15 @@ export default function App() {
         </div>
       </main>
 
-      {/* Bottom bar: opens the add-equipment sheet. A fixed part of the
-          page layout (shrink-0, like the header) rather than a button
-          floating over content — the card list above is flex-sized to
-          leave exactly this much room, so it can never cover a card.
-          TEMP: padding hardcoded to a fixed 8px/8px (no env/max/calc) as
-          a diagnostic — if it's still uneven or oversized on iOS with
-          this, the issue isn't the padding formula at all. */}
-      <div className="shrink-0 border-t-2 border-zinc-900 bg-white px-4 pb-2 pt-2">
+      {/* Bottom bar: opens the add-equipment sheet. Genuinely position:fixed
+          (Apple's standard pattern for a safe-area-respecting toolbar) —
+          not a flex-flow child, since that layout-correct-but-mispainted
+          on real iOS PWA standalone mode. main reserves space for it via
+          bottomBarHeight (measured above), so it still can't cover a card. */}
+      <div
+        ref={bottomBarRef}
+        className="fixed inset-x-0 bottom-0 z-20 border-t-2 border-zinc-900 bg-white px-4 pb-[max(0.5rem,env(safe-area-inset-bottom,0px))] pt-2"
+      >
         <button
           onClick={() => {
             setTargetPhase(null);
