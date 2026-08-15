@@ -428,7 +428,7 @@ export default function App() {
           space below the header, so it only scrolls when content actually
           overflows it (no phantom scroll when the board is nearly empty). */}
       <main className="min-h-0 flex-1 overflow-y-auto overscroll-none">
-        <div className="mx-auto max-w-md px-4 pt-4" style={{ paddingBottom: bottomBarHeight + 8 }}>
+        <div className="mx-auto max-w-md px-4 pt-4" style={{ paddingBottom: bottomBarHeight + 58 }}>
         {threePhaseDevices.length > 0 && (
           <div className="mb-2 rounded-2xl border-2 border-red-200 bg-white px-4 py-3">
             <div className="mb-2 flex items-center gap-2 font-display text-sm font-black text-red-600">
@@ -512,10 +512,16 @@ export default function App() {
           (Apple's standard pattern for a safe-area-respecting toolbar) —
           not a flex-flow child, since that layout-correct-but-mispainted
           on real iOS PWA standalone mode. main reserves space for it via
-          bottomBarHeight (measured above), so it still can't cover a card. */}
+          bottomBarHeight (measured above), so it still can't cover a card.
+          EXPERIMENT: safe-area offset applied via transform (compositor
+          thread) instead of padding-bottom (main-thread layout/paint) —
+          testing whether that dodges a suspected iOS paint-only bug, since
+          every layout measurement here has read as correct while the
+          actual painted gap in portrait clearly wasn't. */}
       <div
         ref={bottomBarRef}
-        className="fixed inset-x-0 bottom-0 z-20 border-t-2 border-zinc-900 bg-white px-4 pb-[max(0.5rem,env(safe-area-inset-bottom,0px))] pt-2"
+        className="fixed inset-x-0 bottom-0 z-20 border-t-2 border-zinc-900 bg-white px-4 pb-2 pt-2"
+        style={{ transform: "translateY(calc(-1 * env(safe-area-inset-bottom, 0px)))" }}
       >
         <button
           onClick={() => {
