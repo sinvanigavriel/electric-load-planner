@@ -457,8 +457,11 @@ export default function App() {
       {/* Bottom bar: opens the add-equipment sheet. A fixed part of the
           page layout (shrink-0, like the header) rather than a button
           floating over content — the card list above is flex-sized to
-          leave exactly this much room, so it can never cover a card. */}
-      <div className="shrink-0 border-t-2 border-zinc-900 bg-white px-4 pb-[max(0.5rem,env(safe-area-inset-bottom,0px))] pt-2">
+          leave exactly this much room, so it can never cover a card.
+          TEMP: padding hardcoded to a fixed 8px/8px (no env/max/calc) as
+          a diagnostic — if it's still uneven or oversized on iOS with
+          this, the issue isn't the padding formula at all. */}
+      <div className="shrink-0 border-t-2 border-zinc-900 bg-white px-4 pb-2 pt-2">
         <button
           onClick={() => {
             setTargetPhase(null);
