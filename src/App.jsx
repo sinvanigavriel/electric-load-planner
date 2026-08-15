@@ -139,6 +139,10 @@ function DebugOverlay() {
 
     const update = () => {
       const main = document.querySelector("main");
+      const appRoot = document.getElementById("root")?.firstElementChild;
+      const bar = [...document.querySelectorAll("div")].find(
+        (d) => d.className.includes("border-t-2") && d.querySelector("button")
+      );
       const cs = getComputedStyle(probe);
       setInfo({
         html: [document.documentElement.scrollHeight, document.documentElement.clientHeight],
@@ -149,6 +153,9 @@ function DebugOverlay() {
         dpr: window.devicePixelRatio,
         safeTop: parseFloat(cs.paddingTop),
         safeBottom: parseFloat(cs.paddingBottom),
+        appRootHeight: appRoot ? Math.round(appRoot.getBoundingClientRect().height) : null,
+        barBottom: bar ? Math.round(bar.getBoundingClientRect().bottom) : null,
+        barTop: bar ? Math.round(bar.getBoundingClientRect().top) : null,
       });
     };
 
@@ -198,6 +205,10 @@ function DebugOverlay() {
       {`innerH:${info.innerHeight} vvH:${info.vvHeight} dpr:${info.dpr}`}
       {"\n"}
       {`safe-top:${info.safeTop} safe-bottom:${info.safeBottom}`}
+      {"\n"}
+      {`appRootH:${info.appRootHeight} (vs innerH:${info.innerHeight})`}
+      {"\n"}
+      {`bar top:${info.barTop} bottom:${info.barBottom} gapBelowBar:${info.barBottom != null ? info.innerHeight - info.barBottom : "?"}`}
     </div>
   );
 }
