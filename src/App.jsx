@@ -143,7 +143,13 @@ function DebugOverlay() {
       const bar = [...document.querySelectorAll("div")].find(
         (d) => d.className.includes("border-t-2") && d.querySelector("button")
       );
+      const btn = bar ? bar.querySelector("button") : null;
       const cs = getComputedStyle(probe);
+      const safeBottom = parseFloat(cs.paddingBottom);
+      const btnBottom = btn ? btn.getBoundingClientRect().bottom : null;
+      // Where the button's bottom edge SHOULD be if padding == real safe-area:
+      // innerHeight - safeBottom - (bar's own 8px baseline padding below button).
+      const expectedBtnBottom = window.innerHeight - Math.max(8, safeBottom);
       setInfo({
         html: [document.documentElement.scrollHeight, document.documentElement.clientHeight],
         body: [document.body.scrollHeight, document.body.clientHeight],
@@ -152,10 +158,13 @@ function DebugOverlay() {
         vvHeight: window.visualViewport ? Math.round(window.visualViewport.height) : null,
         dpr: window.devicePixelRatio,
         safeTop: parseFloat(cs.paddingTop),
-        safeBottom: parseFloat(cs.paddingBottom),
+        safeBottom,
         appRootHeight: appRoot ? Math.round(appRoot.getBoundingClientRect().height) : null,
         barBottom: bar ? Math.round(bar.getBoundingClientRect().bottom) : null,
         barTop: bar ? Math.round(bar.getBoundingClientRect().top) : null,
+        btnBottom: btnBottom != null ? Math.round(btnBottom) : null,
+        expectedBtnBottom: Math.round(expectedBtnBottom),
+        extraGap: btnBottom != null ? Math.round(expectedBtnBottom - btnBottom) : null,
       });
     };
 
@@ -209,6 +218,8 @@ function DebugOverlay() {
       {`appRootH:${info.appRootHeight} (vs innerH:${info.innerHeight})`}
       {"\n"}
       {`bar top:${info.barTop} bottom:${info.barBottom} gapBelowBar:${info.barBottom != null ? info.innerHeight - info.barBottom : "?"}`}
+      {"\n"}
+      {`btnBottom:${info.btnBottom} expected:${info.expectedBtnBottom} extraGap:${info.extraGap}`}
     </div>
   );
 }
