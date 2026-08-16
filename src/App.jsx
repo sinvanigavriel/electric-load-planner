@@ -146,12 +146,35 @@ function evaluateAddition(devices, boxMax, phase, totalRequested) {
   const newGroup16 = t.group16 + totalRequested;
   const newTotal = t.total + totalRequested;
   if (newGroup16 > 16) {
-    return { ok: false, reason: `יעבור את המבטח 16A של קבוצת השקעים (${fmt(newGroup16)}A)` };
+    return { ok: false, blocker: "מבטח 16A", reason: `יעבור את המבטח 16A של קבוצת השקעים (${fmt(newGroup16)}A)` };
   }
   if (newTotal > boxMax) {
-    return { ok: false, reason: `יעבור את מגבלת הלוח בפאזה זו (${fmt(newTotal)}A מתוך ${boxMax}A)` };
+    return { ok: false, blocker: "מגבלת הלוח", reason: `יעבור את מגבלת הלוח בפאזה זו (${fmt(newTotal)}A מתוך ${boxMax}A)` };
   }
   return { ok: true, note: `יישארו ${fmt(16 - newGroup16)}A בקבוצה, ${fmt(boxMax - newTotal)}A בפאזה` };
+}
+
+// The whole point of the tool is answering "which leg do I plug this into",
+// and every number needed to answer it is already here — so answer it instead
+// of asking. Runs the same evaluateAddition check across all three legs and
+// ranks the ones that fit by how much headroom is left, so the picker can show
+// the consequence of each choice up front and point at the emptiest leg.
+// Headroom is whichever limit bites first: the 16A socket group or the board.
+function phaseOptions(devices, boxMax, legAmps) {
+  const totals = phaseTotals(devices);
+  const opts = [1, 2, 3].map((p) => {
+    const verdict = evaluateAddition(devices, boxMax, String(p), legAmps);
+    return {
+      phase: p,
+      before: totals[p].total,
+      after: totals[p].total + legAmps,
+      ok: verdict.ok,
+      blocker: verdict.blocker,
+      headroom: Math.min(16 - (totals[p].group16 + legAmps), boxMax - (totals[p].total + legAmps)),
+    };
+  });
+  const fits = opts.filter((o) => o.ok).sort((a, b) => b.headroom - a.headroom);
+  return { opts, bestPhase: fits.length ? fits[0].phase : null };
 }
 
 // On-device diagnostic overlay. Opt-in only (see showDebug in App) — it used
@@ -369,6 +392,16 @@ export default function App() {
   const totalRequested = perPhaseAmps * qty;
   const evaluation = hasSelection && targetPhase ? evaluateAddition(devices, boxMax, targetPhase, totalRequested) : null;
   const canAdd = hasSelection && targetPhase && evaluation?.ok;
+
+  // What the picker previews. Deliberately independent of targetPhase: these
+  // are what each option WOULD cost, so the numbers must not move around as
+  // the user taps between them (totalRequested does move, since a 3-phase
+  // W/kW rating is split across the legs).
+  const singleLegAmps = singleAmps * qty;
+  const threePhaseLegAmps = (isPowerBased ? singleAmps / 3 : singleAmps) * qty;
+  const { opts: legOptions, bestPhase } = phaseOptions(devices, boxMax, singleLegAmps);
+  const threePhaseVerdict = evaluateAddition(devices, boxMax, "3phase", threePhaseLegAmps);
+  const noLegFits = hasSelection && bestPhase === null;
 
   function handleAdd() {
     if (!canAdd) return;
@@ -698,34 +731,63 @@ export default function App() {
                   state) so it can't be scrolled past or skipped by a fast tap. */}
               {hasSelection && (
                 <>
+                  {/* Each leg carries its own answer: what it holds now, what
+                      it would hold after, and whether it can take the load at
+                      all. A leg that would trip is disabled with the limit that
+                      stops it named on the button, so the mistake can't be
+                      tapped. The emptiest legal leg is labelled מומלץ — same
+                      data the phase cards show, just brought to the decision. */}
                   <div className="mb-4">
                     <div className="mb-2 font-display text-sm font-bold text-zinc-600">לאיזה שקע מתחברים?</div>
                     <div className="mb-2 grid grid-cols-3 gap-2">
-                      {[1, 2, 3].map((p) => {
-                        const s = PHASE_STYLE[p];
-                        const selected = targetPhase === String(p);
+                      {legOptions.map((o) => {
+                        const s = PHASE_STYLE[o.phase];
+                        const selected = targetPhase === String(o.phase);
                         return (
                           <button
-                            key={p}
-                            onClick={() => setTargetPhase(String(p))}
-                            className={`rounded-xl py-4 text-center font-display text-white transition ${s.chipBg} ${
-                              selected ? "ring-4 ring-zinc-900 ring-offset-2" : "opacity-80"
+                            key={o.phase}
+                            onClick={() => setTargetPhase(String(o.phase))}
+                            disabled={!o.ok}
+                            className={`relative rounded-xl pb-3 pt-5 text-center font-display text-white transition ${s.chipBg} ${
+                              !o.ok
+                                ? "opacity-40"
+                                : selected
+                                ? "ring-4 ring-zinc-900 ring-offset-2"
+                                : o.phase === bestPhase
+                                ? "ring-2 ring-inset ring-white/90"
+                                : "opacity-80"
                             }`}
                           >
+                            {o.ok && o.phase === bestPhase && (
+                              <span className="absolute inset-x-1 top-1 rounded-md bg-white/95 py-0.5 text-[10px] font-black text-zinc-900">
+                                מומלץ
+                              </span>
+                            )}
                             <div className="text-base font-black">{s.label}</div>
                             <div className="text-xs">{s.sub}</div>
+                            <div className="mt-0.5 text-xs font-bold">
+                              {o.ok ? `${fmt(o.before)} ← ${fmt(o.after)}A` : `✕ ${o.blocker}`}
+                            </div>
                           </button>
                         );
                       })}
                     </div>
                     <button
                       onClick={() => setTargetPhase("3phase")}
-                      className={`w-full rounded-xl py-4 text-center font-display text-white transition ${THREE_PHASE_STYLE.chipBg} ${
-                        targetPhase === "3phase" ? "ring-4 ring-zinc-900 ring-offset-2" : "opacity-80"
+                      disabled={!threePhaseVerdict.ok}
+                      className={`w-full rounded-xl py-3 text-center font-display text-white transition ${THREE_PHASE_STYLE.chipBg} ${
+                        !threePhaseVerdict.ok
+                          ? "opacity-40"
+                          : targetPhase === "3phase"
+                          ? "ring-4 ring-zinc-900 ring-offset-2"
+                          : "opacity-80"
                       }`}
                     >
                       <div className="text-base font-black">{THREE_PHASE_STYLE.label}</div>
-                      <div className="text-xs">{THREE_PHASE_STYLE.sub}</div>
+                      <div className="text-xs">
+                        {THREE_PHASE_STYLE.sub} ·{" "}
+                        {threePhaseVerdict.ok ? `+${fmt(threePhaseLegAmps)}A לכל פאזה` : "לא נכנס"}
+                      </div>
                     </button>
                   </div>
 
@@ -752,9 +814,15 @@ export default function App() {
             </div>
 
             <div className="shrink-0 border-t-2 border-zinc-900 bg-white px-4 pb-[max(0.5rem,env(safe-area-inset-bottom,0px))] pt-2">
-              {hasSelection && !targetPhase && (
-                <div className="mb-2 rounded-xl bg-zinc-100 px-3 py-2 text-center font-body text-sm font-bold text-zinc-500">
-                  בחרו לאיזה שקע מתחברים
+              {/* No "pick a socket" hint here any more: the label above the
+                  picker, the מומלץ badge and the button's own disabled text all
+                  said it already, three times at once, and the extra 52px was
+                  enough to push this button off the bottom of an iPhone. The
+                  slot is now used only when it has something to add — that no
+                  single leg can take this load, which nothing else shows. */}
+              {noLegFits && !targetPhase && (
+                <div className="mb-2 rounded-xl bg-red-50 px-3 py-2 text-center font-body text-sm font-bold text-red-700">
+                  ✕ אין פאזה בודדת שיכולה לקחת את העומס הזה
                 </div>
               )}
               {evaluation && (
