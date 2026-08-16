@@ -14,6 +14,12 @@ body {
   height: 100%;
   overflow: hidden;
   overscroll-behavior: none;
+  /* Safety net, not a fix: this is the canvas colour that shows through if the
+     app root ever fails to reach a screen edge again. White matches both the
+     header and the bottom bar, so a stray strip reads as part of them instead
+     of as a bright band. The actual edge-to-edge fix is in index.html — see
+     the apple-mobile-web-app-status-bar-style comment there. */
+  background-color: #ffffff;
 }
 
 #root {

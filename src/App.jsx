@@ -78,6 +78,37 @@ const PHASE_STYLE = {
 };
 const THREE_PHASE_STYLE = { chipBg: "bg-cable-red", dot: "bg-cable-red", bar: "bg-cable-red", label: "תלת פאזי", sub: "שקע אדום 32A", short: "3F" };
 
+// Tracks an element's BORDER-box height. Two things here are deliberate and
+// both were needed to make safe-area padding behave:
+//   - border-box, not the default contentRect: a bar's safe-area padding and
+//     border are exactly the parts that must be reserved, and contentRect
+//     reports neither.
+//   - box:"border-box" on observe(), not just reading the border box in the
+//     callback: a content-box observer never FIRES for a padding-only change,
+//     and a safe-area inset appearing (iOS often reports 0 on first paint,
+//     then the real value) or changing on rotation is precisely that.
+// The resize/orientation listeners cover Safari older than 15.4, which
+// ignores the box option.
+function useObservedBorderBoxHeight(ref, setHeight) {
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const measure = () => setHeight(el.getBoundingClientRect().height);
+    const ro = new ResizeObserver(measure);
+    ro.observe(el, { box: "border-box" });
+    measure();
+    window.addEventListener("resize", measure);
+    window.addEventListener("orientationchange", measure);
+    window.visualViewport?.addEventListener("resize", measure);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", measure);
+      window.removeEventListener("orientationchange", measure);
+      window.visualViewport?.removeEventListener("resize", measure);
+    };
+  }, [ref, setHeight]);
+}
+
 const wattsToAmps = (w) => w / VOLTAGE;
 const fmt = (n) => (Math.round(n * 10) / 10).toFixed(1);
 const genId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -123,10 +154,16 @@ function evaluateAddition(devices, boxMax, phase, totalRequested) {
   return { ok: true, note: `יישארו ${fmt(16 - newGroup16)}A בקבוצה, ${fmt(boxMax - newTotal)}A בפאזה` };
 }
 
-// TEMPORARY diagnostic overlay — remove once the iOS phantom-scroll bug is
-// found. Shows the same scrollHeight/clientHeight numbers a Safari Web
-// Inspector session would, directly on-device, since a Mac isn't available
-// to connect one. Read-only, click-through (pointerEvents: none).
+// On-device diagnostic overlay. Opt-in only (see showDebug in App) — it used
+// to render unconditionally, i.e. in front of every real user. Shows the
+// numbers a Safari Web Inspector session would, directly on-device, since a
+// Mac isn't available to connect one. Read-only, click-through.
+//
+// The line that matters is SHIFTED. If safe-area-inset-top is non-zero AND
+// innerHeight + that inset adds back up to the full screen height, then iOS
+// has laid the document out over the whole screen but is still reporting the
+// shorter, status-bar-excluded height — the black-translucent bug that left a
+// dead strip at the bottom. Healthy standalone reads safeTop:0.
 function DebugOverlay() {
   const [info, setInfo] = useState(null);
 
@@ -235,6 +272,12 @@ function DebugOverlay() {
       {`btnBottom:${info.btnBottom} expected:${info.expectedBtnBottom} extraGap:${info.extraGap}`}
       {"\n"}
       {`100dvh=${info.dvhPx}px screen.h=${info.screenHeight} avail=${info.screenAvailHeight}`}
+      {"\n"}
+      {`SHIFTED:${
+        info.safeTop > 0 && info.screenHeight != null && Math.abs(info.innerHeight + info.safeTop - info.screenHeight) <= 2
+          ? `YES — ${info.safeTop}px dead strip at bottom`
+          : "no"
+      }`}
     </div>
   );
 }
@@ -259,35 +302,39 @@ export default function App() {
   const resetTimer = useRef(null);
   useEffect(() => () => clearTimeout(resetTimer.current), []);
 
+  // Diagnostic overlay: ?debug=1 works in a browser tab, but the viewport bugs
+  // worth measuring only happen in the installed standalone app, where there's
+  // no address bar to add a query string to — hence the 5-taps-on-the-logo
+  // toggle, which is reachable there and invisible to everyone else.
+  const [showDebug, setShowDebug] = useState(
+    () => new URLSearchParams(window.location.search).get("debug") === "1"
+  );
+  const logoTaps = useRef(0);
+  const logoTapTimer = useRef(null);
+  useEffect(() => () => clearTimeout(logoTapTimer.current), []);
+  function handleLogoTap() {
+    logoTaps.current += 1;
+    clearTimeout(logoTapTimer.current);
+    if (logoTaps.current >= 5) {
+      logoTaps.current = 0;
+      setShowDebug((v) => !v);
+      return;
+    }
+    logoTapTimer.current = setTimeout(() => (logoTaps.current = 0), 600);
+  }
+
   // Sheet is bounded to the space below the header (not a % of viewport
   // height) so it can never grow tall enough to cover the header — and the
   // header never has to cover the sheet's own title bar either.
   const headerRef = useRef(null);
   const [headerHeight, setHeaderHeight] = useState(0);
-  useEffect(() => {
-    const el = headerRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver((entries) => setHeaderHeight(entries[0].contentRect.height));
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
+  useObservedBorderBoxHeight(headerRef, setHeaderHeight);
 
-  // The bottom bar is genuinely position:fixed (not a flex-flow child) so
-  // it uses iOS's standard, best-tested safe-area pattern — bottom:0 +
-  // padding-bottom:env(safe-area-inset-bottom) on a truly fixed element,
-  // instead of the flex-shrink-child approach that measured correctly but
-  // visibly mispainted on real iOS PWA. Since it's out of flow, main needs
-  // its own bottom clearance reserved, measured the same way headerHeight
-  // is, so it's always exactly the bar's real height, never a guess.
+  // The bottom bar is position:fixed (not a flex-flow child), so main has to
+  // reserve its own bottom clearance equal to the bar's real height.
   const bottomBarRef = useRef(null);
   const [bottomBarHeight, setBottomBarHeight] = useState(0);
-  useEffect(() => {
-    const el = bottomBarRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver((entries) => setBottomBarHeight(entries[0].contentRect.height));
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
+  useObservedBorderBoxHeight(bottomBarRef, setBottomBarHeight);
 
   let singleAmps = 0;
   let isPowerBased = true; // true: derived from W/kW (nameplate = total power). false: entered directly in A.
@@ -374,13 +421,13 @@ export default function App() {
 
   return (
     <div dir="rtl" className="h-[100dvh] flex flex-col overflow-hidden bg-zinc-100 font-body text-zinc-900">
-      <DebugOverlay />
+      {showDebug && <DebugOverlay />}
       {/* Header: board rating + reset + overload alert. A plain flex item
           (not scrolled, not sticky) — the page body below is the only
           scrollable region, so there's nothing for it to scroll past. */}
       <div ref={headerRef} className="shrink-0 border-b-4 border-zinc-900 bg-white pt-[min(env(safe-area-inset-top),60px)]">
         <div className="mx-auto flex max-w-md items-center gap-3 px-4 py-3">
-          <div className="flex items-center gap-2 font-display text-lg font-black">
+          <div onClick={handleLogoTap} className="flex items-center gap-2 font-display text-lg font-black">
             <Plug className="h-6 w-6" />
             <span>עומסי חשמל</span>
           </div>
@@ -428,7 +475,10 @@ export default function App() {
           space below the header, so it only scrolls when content actually
           overflows it (no phantom scroll when the board is nearly empty). */}
       <main className="min-h-0 flex-1 overflow-y-auto overscroll-none">
-        <div className="mx-auto max-w-md px-4 pt-4" style={{ paddingBottom: bottomBarHeight + 58 }}>
+        {/* bottomBarHeight is the bar's true border-box height, so this only
+            needs a small breathing gap on top of it — not the old magic
+            constant, which left ~24px of dead scroll below the last card. */}
+        <div className="mx-auto max-w-md px-4 pt-4" style={{ paddingBottom: bottomBarHeight + 16 }}>
         {threePhaseDevices.length > 0 && (
           <div className="mb-2 rounded-2xl border-2 border-red-200 bg-white px-4 py-3">
             <div className="mb-2 flex items-center gap-2 font-display text-sm font-black text-red-600">
@@ -508,20 +558,17 @@ export default function App() {
         </div>
       </main>
 
-      {/* Bottom bar: opens the add-equipment sheet. Genuinely position:fixed
-          (Apple's standard pattern for a safe-area-respecting toolbar) —
-          not a flex-flow child, since that layout-correct-but-mispainted
-          on real iOS PWA standalone mode. main reserves space for it via
-          bottomBarHeight (measured above), so it still can't cover a card.
-          EXPERIMENT: safe-area offset applied via transform (compositor
-          thread) instead of padding-bottom (main-thread layout/paint) —
-          testing whether that dodges a suspected iOS paint-only bug, since
-          every layout measurement here has read as correct while the
-          actual painted gap in portrait clearly wasn't. */}
+      {/* Bottom bar: opens the add-equipment sheet. position:fixed with
+          bottom:0 + padding-bottom:env(safe-area-inset-bottom) — the plain,
+          standard safe-area toolbar pattern. It reads as "too much padding"
+          on iPhone only if the web view is taller than the box bottom:0
+          resolves against; that mismatch was the black-translucent status bar
+          bug, fixed in index.html, not something to compensate for here.
+          main reserves space for it via bottomBarHeight (measured above), so
+          it can't cover a card. */}
       <div
         ref={bottomBarRef}
-        className="fixed inset-x-0 bottom-0 z-20 border-t-2 border-zinc-900 bg-white px-4 pb-2 pt-2"
-        style={{ transform: "translateY(calc(-1 * env(safe-area-inset-bottom, 0px)))" }}
+        className="fixed inset-x-0 bottom-0 z-20 border-t-2 border-zinc-900 bg-white px-4 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom,0px))]"
       >
         <button
           onClick={() => {

@@ -9,7 +9,20 @@
     <link rel="icon" type="image/png" href="./icons/favicon.png" />
     <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <!-- MUST NOT be "black-translucent". That value makes iOS lay the web view
+         out over the full screen (starting under the status bar) while
+         window.innerHeight / 100dvh / the fixed-position containing block all
+         keep reporting the SHORTER height that excludes the status bar. The
+         document is therefore shifted up by env(safe-area-inset-top) and a
+         dead strip exactly that tall is left at the bottom — which is what the
+         "huge gap under the add-equipment button, iPhone only" bug was. It
+         only ever showed on iOS because black-translucent is an Apple-only
+         meta; Android's standalone PWA never shifts the document.
+         "black" keeps the same dark status bar look (matches theme-color)
+         without taking the web view full-screen, so innerHeight, 100dvh and
+         bottom:0 all describe the same box again. -->
+    <meta name="apple-mobile-web-app-status-bar-style" content="black" />
     <meta name="apple-mobile-web-app-title" content="עומסי חשמל" />
 
     <link rel="preconnect" href="https://fonts.googleapis.com" />
