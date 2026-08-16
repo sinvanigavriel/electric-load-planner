@@ -250,6 +250,78 @@ function phaseStatus(t, boxMax) {
 const joinHe = (arr) =>
   arr.length <= 1 ? String(arr[0] ?? "") : `${arr.slice(0, -1).join(", ")} ו-${arr[arr.length - 1]}`;
 
+// Nameplates are written in watts, so show the figure the label on the machine
+// actually says. Derived rather than stored so boards saved before this
+// existed still display it, and the derivation matches the app's own model
+// exactly: three legs at 230V each, so a 3-phase device's total power is its
+// per-leg current across all three. A 3000W 3-phase load stores 4.35A per leg
+// and comes back out as 3000W.
+const deviceWatts = (d) => Math.round((d.phase === "3phase" ? d.amps * 3 : d.amps) * VOLTAGE);
+
+// Five identical fans were five identical rows. Same machine at the same
+// rating on the same leg is one line with a count — the list is for reading
+// the board at a glance, and repetition is noise, not information.
+function groupDevices(list) {
+  const groups = [];
+  const byKey = new Map();
+  list.forEach((d) => {
+    const key = `${d.phase}|${d.name}|${d.amps}`;
+    const found = byKey.get(key);
+    if (found) {
+      found.ids.push(d.id);
+      return;
+    }
+    const g = { key, name: d.name, amps: d.amps, phase: d.phase, ids: [d.id] };
+    byKey.set(key, g);
+    groups.push(g);
+  });
+  return groups;
+}
+
+// One row per group. The control morphs with the count because the action
+// genuinely changes: stepping 5 down to 4 is harmless and instant, removing
+// the last unit destroys the entry and needs the same double-tap the "לוח חדש"
+// button uses. "+" is gated by the same evaluateAddition() the phase picker
+// uses, so quantity can never be a way round a breaker limit.
+function DeviceGroupRow({ group, canAddMore, armed, onAdd, onRemove }) {
+  const count = group.ids.length;
+  const perUnit = `${fmt(group.amps)}A · ${deviceWatts(group)}W`;
+  return (
+    <div className="flex items-center justify-between gap-2 rounded-xl bg-zinc-50 px-3 py-2">
+      <div className="min-w-0">
+        <div className="truncate font-body text-sm font-bold">{group.name}</div>
+        <div className="font-body text-xs text-zinc-500">
+          {count > 1 ? `${perUnit} ליחידה · סה״כ ${fmt(group.amps * count)}A` : perUnit}
+        </div>
+      </div>
+      <div className="flex shrink-0 items-center gap-1">
+        <button
+          onClick={onRemove}
+          className={`flex h-8 w-8 items-center justify-center rounded-lg transition ${
+            armed ? "bg-red-600 text-white" : "bg-zinc-200 text-zinc-600"
+          }`}
+          aria-label={count > 1 ? `הסר יחידה מ${group.name}` : `מחק ${group.name}`}
+        >
+          {count > 1 ? <Minus className="h-4 w-4" /> : <Trash2 className="h-4 w-4" />}
+        </button>
+        {count > 1 && (
+          <>
+            <span className="w-5 text-center font-display text-sm font-black tabular-nums">{count}</span>
+            <button
+              onClick={onAdd}
+              disabled={!canAddMore}
+              className="flex h-8 w-8 items-center justify-center rounded-lg bg-zinc-200 text-zinc-600 transition disabled:opacity-30"
+              aria-label={`הוסף יחידה ל${group.name}`}
+            >
+              <Plus className="h-4 w-4" />
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function evaluateAddition(devices, boxMax, phase, totalRequested) {
   const totals = phaseTotals(devices);
   if (phase === "3phase") {
@@ -492,6 +564,11 @@ export default function App() {
   const resetTimer = useRef(null);
   useEffect(() => () => clearTimeout(resetTimer.current), []);
 
+  // Which group's delete is armed and waiting for its confirming second tap.
+  const [armedDelete, setArmedDelete] = useState(null);
+  const armTimer = useRef(null);
+  useEffect(() => () => clearTimeout(armTimer.current), []);
+
   // Diagnostic overlay: ?debug=1 works in a browser tab, but the viewport bugs
   // worth measuring only happen in the installed standalone app, where there's
   // no address bar to add a query string to — hence the 5-taps-on-the-logo
@@ -641,8 +718,30 @@ export default function App() {
     setSelectedItem((cur) => (cur?.key === `s:${name}` ? null : cur));
   }
 
-  function removeDevice(id) {
-    setDevices((prev) => prev.filter((d) => d.id !== id));
+  // Removing the last unit of a group is destructive and a single mis-tap used
+  // to do it, so it arms first and confirms on a second tap — the same
+  // three-second pattern as "לוח חדש". Stepping a multi-unit group down does
+  // not arm: it is trivially undone with "+", so a confirmation would only be
+  // in the way.
+  function handleGroupRemove(group) {
+    if (group.ids.length > 1) {
+      const last = group.ids[group.ids.length - 1];
+      setDevices((prev) => prev.filter((d) => d.id !== last));
+      return;
+    }
+    if (armedDelete !== group.key) {
+      setArmedDelete(group.key);
+      clearTimeout(armTimer.current);
+      armTimer.current = setTimeout(() => setArmedDelete(null), 3000);
+      return;
+    }
+    clearTimeout(armTimer.current);
+    setArmedDelete(null);
+    setDevices((prev) => prev.filter((d) => !group.ids.includes(d.id)));
+  }
+
+  function handleGroupAdd(group) {
+    setDevices((prev) => [...prev, { id: genId(), name: group.name, amps: group.amps, phase: group.phase }]);
   }
 
   function handleResetClick() {
@@ -760,16 +859,18 @@ export default function App() {
               <span className={`h-2.5 w-2.5 rounded-full ${THREE_PHASE_STYLE.dot}`} />
               שקעים תלת-פאזיים · מוסיפים לכל 3 הפאזות
             </div>
-            {threePhaseDevices.map((d) => (
-              <div key={d.id} className="mb-1.5 flex items-center justify-between rounded-xl bg-zinc-50 px-3 py-2 last:mb-0">
-                <div className="font-body text-sm font-bold">
-                  {d.name} <span className="font-normal text-zinc-500">· {fmt(d.amps)}A לכל פאזה</span>
-                </div>
-                <button onClick={() => removeDevice(d.id)} className="rounded-lg bg-zinc-200 p-1.5 text-zinc-600 active:bg-red-600 active:text-white">
-                  <Trash2 className="h-4 w-4" />
-                </button>
-              </div>
-            ))}
+            <div className="space-y-1.5">
+              {groupDevices(threePhaseDevices).map((g) => (
+                <DeviceGroupRow
+                  key={g.key}
+                  group={g}
+                  armed={armedDelete === g.key}
+                  canAddMore={evaluateAddition(devices, boxMax, "3phase", g.amps).ok}
+                  onAdd={() => handleGroupAdd(g)}
+                  onRemove={() => handleGroupRemove(g)}
+                />
+              ))}
+            </div>
           </div>
         )}
 
@@ -841,15 +942,15 @@ export default function App() {
 
                 {phaseDevices.length > 0 && (
                   <div className="space-y-1.5">
-                    {phaseDevices.map((d) => (
-                      <div key={d.id} className="flex items-center justify-between rounded-xl bg-zinc-50 px-3 py-2">
-                        <div className="font-body text-sm font-bold">
-                          {d.name} <span className="font-normal text-zinc-500">· {fmt(d.amps)}A</span>
-                        </div>
-                        <button onClick={() => removeDevice(d.id)} className="rounded-lg bg-zinc-200 p-1.5 text-zinc-600 active:bg-red-600 active:text-white">
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      </div>
+                    {groupDevices(phaseDevices).map((g) => (
+                      <DeviceGroupRow
+                        key={g.key}
+                        group={g}
+                        armed={armedDelete === g.key}
+                        canAddMore={evaluateAddition(devices, boxMax, String(p), g.amps).ok}
+                        onAdd={() => handleGroupAdd(g)}
+                        onRemove={() => handleGroupRemove(g)}
+                      />
                     ))}
                   </div>
                 )}
@@ -1022,7 +1123,7 @@ export default function App() {
                             <span
                               role="button"
                               tabIndex={0}
-                              aria-label={`מחק ${item.name}`}
+                              aria-label={`מחק את ${item.name} מהרשימה שלי`}
                               onClick={(e) => {
                                 e.stopPropagation();
                                 deleteSaved(item.name);
@@ -1036,7 +1137,12 @@ export default function App() {
                           )}
                           <item.Icon className="h-6 w-6" />
                           <span className="font-body text-xs font-bold leading-tight">{item.name}</span>
-                          <span className={`font-body text-xs ${selected ? "text-zinc-300" : "text-zinc-400"}`}>{fmt(item.amps)}A</span>
+                          {/* Watts as well as amps: a nameplate is written in
+                              watts, so this is the number being matched against
+                              the machine in front of you. */}
+                          <span className={`font-body text-xs ${selected ? "text-zinc-300" : "text-zinc-400"}`}>
+                            {fmt(item.amps)}A · {Math.round(item.amps * VOLTAGE)}W
+                          </span>
                         </button>
                       );
                     })}
