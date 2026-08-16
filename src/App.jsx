@@ -109,6 +109,78 @@ function useObservedBorderBoxHeight(ref, setHeight) {
   }, [ref, setHeight]);
 }
 
+// How many pixels of the layout viewport the on-screen keyboard is covering.
+//
+// iOS does NOT shrink the layout viewport when the keyboard opens — only the
+// visual viewport — so window.innerHeight is unchanged and anything anchored
+// to bottom:0 stays put underneath the keyboard. That is why the sheet's
+// confirm button was unreachable while typing a custom load: not a spacing
+// problem, no amount of trimming fixes it. Android resizes the layout viewport
+// instead, which makes this naturally 0 there, so the same code is correct on
+// both. The 40px floor ignores the small visual-viewport shifts that come from
+// the URL bar and sub-pixel rounding.
+function useKeyboardInset() {
+  const [inset, setInset] = useState(0);
+  useEffect(() => {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const update = () => {
+      const covered = window.innerHeight - vv.height - vv.offsetTop;
+      setInset(covered > 40 ? Math.round(covered) : 0);
+    };
+    update();
+    vv.addEventListener("resize", update);
+    vv.addEventListener("scroll", update);
+    return () => {
+      vv.removeEventListener("resize", update);
+      vv.removeEventListener("scroll", update);
+    };
+  }, []);
+  return inset;
+}
+
+// Last few devices connected, newest first — a field board is mostly the same
+// three or four machines over and over, so the fastest path to the common case
+// is not searching a catalogue at all. Replayed as the exact original input
+// (a preset by name, a custom load with its original value AND unit) so the
+// electrical maths is identical to typing it again: re-entering 3000W as
+// "13.0A" would silently change how a 3-phase rating gets split.
+const RECENTS_KEY = "elp.recents.v1";
+const MAX_RECENTS = 4;
+
+function loadRecents() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(RECENTS_KEY));
+    return Array.isArray(raw) ? raw.slice(0, MAX_RECENTS) : [];
+  } catch {
+    return [];
+  }
+}
+
+const recentKey = (r) => (r.kind === "preset" ? `p:${r.name}` : `c:${r.value}${r.unit}:${r.name}`);
+
+// Resolves a stored recent back to something displayable. Returns null for
+// entries that no longer resolve — e.g. a preset renamed in a later release —
+// so a stale cache can never crash the sheet.
+function recentInfo(r) {
+  if (r.kind === "preset") {
+    const item = PRESET_CATEGORIES.flatMap((c) => c.items).find((i) => i.name === r.name);
+    return item ? { label: item.name, amps: wattsToAmps(item.watts), Icon: item.Icon } : null;
+  }
+  const v = parseFloat(r.value);
+  if (!(v > 0)) return null;
+  const amps = r.unit === "A" ? v : r.unit === "kW" ? (v * 1000) / VOLTAGE : v / VOLTAGE;
+  return { label: r.name || "עומס מותאם", amps, Icon: Plug };
+}
+
+function saveRecents(list) {
+  try {
+    localStorage.setItem(RECENTS_KEY, JSON.stringify(list.slice(0, MAX_RECENTS)));
+  } catch {
+    /* private mode / quota — recents are a convenience, never a requirement */
+  }
+}
+
 const wattsToAmps = (w) => w / VOLTAGE;
 const fmt = (n) => (Math.round(n * 10) / 10).toFixed(1);
 const genId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -321,6 +393,9 @@ export default function App() {
   // never silently lands a device on phase 1 by accident.
   const [targetPhase, setTargetPhase] = useState(null);
 
+  const [recents, setRecents] = useState(loadRecents);
+  const keyboardInset = useKeyboardInset();
+
   const [confirmReset, setConfirmReset] = useState(false);
   const resetTimer = useRef(null);
   useEffect(() => () => clearTimeout(resetTimer.current), []);
@@ -412,10 +487,40 @@ export default function App() {
       phase: targetPhase,
     }));
     setDevices((prev) => [...prev, ...newOnes]);
+
+    const entry =
+      mode === "preset" && selectedPreset
+        ? { kind: "preset", name: selectedPreset.name }
+        : { kind: "custom", name: customName.trim(), value: customValue, unit: customUnit };
+    setRecents((prev) => {
+      const next = [entry, ...prev.filter((r) => recentKey(r) !== recentKey(entry))].slice(0, MAX_RECENTS);
+      saveRecents(next);
+      return next;
+    });
+
     setSelectedPreset(null);
     setCustomValue("");
     setCustomName("");
     setQty(1);
+    setTargetPhase(null);
+  }
+
+  // Puts a recent back into the normal input state rather than bypassing it,
+  // so there is still exactly one path that produces singleAmps.
+  function pickRecent(r) {
+    if (r.kind === "preset") {
+      const ci = PRESET_CATEGORIES.findIndex((c) => c.items.some((i) => i.name === r.name));
+      const item = ci >= 0 ? PRESET_CATEGORIES[ci].items.find((i) => i.name === r.name) : null;
+      if (!item) return;
+      setMode("preset");
+      setPresetCat(ci);
+      setSelectedPreset(item);
+    } else {
+      setMode("custom");
+      setCustomValue(r.value);
+      setCustomUnit(r.unit);
+      setCustomName(r.name);
+    }
     setTargetPhase(null);
   }
 
@@ -615,9 +720,15 @@ export default function App() {
         </button>
       </div>
 
-      {/* Add-equipment bottom sheet — bounded to the area below the header */}
+      {/* Add-equipment bottom sheet — bounded to the area below the header,
+          and at the bottom by the keyboard rather than pinned to 0 (see
+          useKeyboardInset), so on iOS the footer rides above the keyboard
+          instead of hiding behind it. */}
       {showAddModal && (
-        <div className="fixed inset-x-0 bottom-0 z-30 flex items-end justify-center" style={{ top: headerHeight }}>
+        <div
+          className="fixed inset-x-0 z-30 flex items-end justify-center"
+          style={{ top: headerHeight, bottom: keyboardInset }}
+        >
           <div className="absolute inset-0 bg-black/50" onClick={() => setShowAddModal(false)} />
           <div className="relative flex max-h-full w-full max-w-md flex-col overflow-hidden rounded-t-3xl bg-zinc-100 shadow-2xl">
             <div className="flex shrink-0 items-center justify-between border-b-2 border-zinc-900 bg-white px-4 py-3">
@@ -632,6 +743,33 @@ export default function App() {
             </div>
 
             <div className="min-h-0 flex-1 overflow-y-auto overscroll-none px-4 pb-4 pt-3">
+              {/* Recents — a board is mostly the same few machines, so the
+                  common case should cost one tap, not tab + category + tile.
+                  Absent until there is history, so it never costs a first-time
+                  user any height. */}
+              {recents.length > 0 && (
+                <div className="mb-3 flex gap-1.5 overflow-x-auto pb-0.5">
+                  {recents.map((r) => {
+                    const info = recentInfo(r);
+                    if (!info) return null;
+                    const active = info.label === deviceName;
+                    return (
+                      <button
+                        key={recentKey(r)}
+                        onClick={() => pickRecent(r)}
+                        className={`flex shrink-0 items-center gap-1.5 rounded-lg border-2 px-2.5 py-1.5 font-body text-xs font-bold transition ${
+                          active ? "border-zinc-900 bg-zinc-900 text-white" : "border-zinc-200 bg-white text-zinc-700"
+                        }`}
+                      >
+                        <info.Icon className="h-3.5 w-3.5 shrink-0" />
+                        <span className="max-w-28 truncate">{info.label}</span>
+                        <span className={active ? "text-zinc-300" : "text-zinc-400"}>{fmt(info.amps)}A</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
               {/* Mode tabs */}
               <div className="mb-3 flex overflow-hidden rounded-2xl border-2 border-zinc-900">
                 <button
@@ -668,7 +806,11 @@ export default function App() {
                       </button>
                     ))}
                   </div>
-                  <div className="grid grid-cols-3 gap-2">
+                  {/* flex-wrap + justify-center, not grid-cols-3: a category
+                      with 2 items left an empty third cell that read as a
+                      missing tile. Centring the short row says "this category
+                      has two" instead. */}
+                  <div className="flex flex-wrap justify-center gap-2">
                     {PRESET_CATEGORIES[presetCat].items.map((item) => {
                       const selected = selectedPreset?.name === item.name;
                       const amps = wattsToAmps(item.watts);
@@ -677,7 +819,7 @@ export default function App() {
                         <button
                           key={item.name}
                           onClick={() => setSelectedPreset(selected ? null : item)}
-                          className={`relative flex min-h-20 flex-col items-center justify-center gap-1 rounded-xl border-2 p-2 text-center transition ${
+                          className={`relative flex min-h-20 flex-[0_0_calc(33.333%-6px)] flex-col items-center justify-center gap-1 rounded-xl border-2 p-2 text-center transition ${
                             selected ? "border-zinc-900 bg-zinc-900 text-white" : "border-zinc-200 bg-zinc-50 text-zinc-800"
                           }`}
                         >
@@ -772,43 +914,42 @@ export default function App() {
                         );
                       })}
                     </div>
+                    {/* Red stays — a 32A 5-pin socket is red by IEC 60309, and
+                        matching the hardware is the whole point of the colour
+                        coding here. But a full red FILL is also this app's
+                        danger signal (#d32f2f vs red-600 #dc2626 are 9/255
+                        apart), and the overload banner can be on screen at the
+                        same moment meaning the opposite thing. So the red is
+                        demoted from fill to identifier — a colour bar and a dot
+                        on a white card, exactly how the phase cards in the main
+                        list already carry their cable colour. Reads as a
+                        different KIND of connection too, which it is: a
+                        dedicated socket, not one of the three legs. */}
                     <button
                       onClick={() => setTargetPhase("3phase")}
                       disabled={!threePhaseVerdict.ok}
-                      className={`w-full rounded-xl py-3 text-center font-display text-white transition ${THREE_PHASE_STYLE.chipBg} ${
+                      className={`w-full overflow-hidden rounded-xl border-2 bg-white text-right transition ${
                         !threePhaseVerdict.ok
-                          ? "opacity-40"
+                          ? "border-zinc-200 opacity-40"
                           : targetPhase === "3phase"
-                          ? "ring-4 ring-zinc-900 ring-offset-2"
-                          : "opacity-80"
+                          ? "border-zinc-900 ring-2 ring-zinc-900"
+                          : "border-zinc-200"
                       }`}
                     >
-                      <div className="text-base font-black">{THREE_PHASE_STYLE.label}</div>
-                      <div className="text-xs">
-                        {THREE_PHASE_STYLE.sub} ·{" "}
-                        {threePhaseVerdict.ok ? `+${fmt(threePhaseLegAmps)}A לכל פאזה` : "לא נכנס"}
+                      <div className={`h-1.5 ${THREE_PHASE_STYLE.bar}`} />
+                      <div className="flex items-center justify-between px-3 py-2">
+                        <div className="flex items-center gap-2">
+                          <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${THREE_PHASE_STYLE.dot}`} />
+                          <span className="font-display text-base font-black text-zinc-900">{THREE_PHASE_STYLE.label}</span>
+                          <span className="font-body text-xs text-zinc-400">{THREE_PHASE_STYLE.sub}</span>
+                        </div>
+                        <span className="font-body text-xs font-bold text-zinc-600">
+                          {threePhaseVerdict.ok ? `+${fmt(threePhaseLegAmps)}A לכל פאזה` : "✕ לא נכנס"}
+                        </span>
                       </div>
                     </button>
                   </div>
 
-                  <div className="mb-4 flex items-center justify-between rounded-2xl border-2 border-zinc-200 bg-white p-3">
-                    <span className="font-display text-base font-bold text-zinc-700">כמות יחידות</span>
-                    <div className="flex items-center gap-4">
-                      <button
-                        onClick={() => setQty((q) => Math.max(1, q - 1))}
-                        className="flex h-12 w-12 items-center justify-center rounded-xl bg-zinc-100 text-zinc-900 active:bg-zinc-200"
-                      >
-                        <Minus className="h-5 w-5" />
-                      </button>
-                      <span className="w-8 text-center font-display text-2xl font-black">{qty}</span>
-                      <button
-                        onClick={() => setQty((q) => Math.min(50, q + 1))}
-                        className="flex h-12 w-12 items-center justify-center rounded-xl bg-zinc-100 text-zinc-900 active:bg-zinc-200"
-                      >
-                        <Plus className="h-5 w-5" />
-                      </button>
-                    </div>
-                  </div>
                 </>
               )}
             </div>
@@ -830,19 +971,46 @@ export default function App() {
                   {evaluation.ok ? evaluation.note : `✕ ${evaluation.reason}`}
                 </div>
               )}
-              {/* Deliberately identical geometry to the bottom bar's "add
-                  equipment" button (rounded-xl / py-3 / text-base = 48px tall):
-                  it's the same primary action at the other end of the flow, so
-                  it should read as the same control, not a bigger one. */}
-              <button
-                onClick={handleAdd}
-                disabled={!canAdd}
-                className={`w-full rounded-xl py-3 text-center font-display text-base font-black text-white transition ${
-                  canAdd ? "bg-zinc-900 active:scale-[0.98]" : "bg-zinc-300"
-                }`}
-              >
-                {!hasSelection ? "בחרו ציוד לחיבור" : !targetPhase ? "בחרו שקע לחיבור" : `חבר · ${fmt(totalRequested)}A`}
-              </button>
+              {/* Quantity lives here, not as its own 92px card up in the
+                  scrolling area. It modifies this action, so it belongs beside
+                  it — and being in the sticky footer it stays reachable with
+                  the keyboard open. Steppers stay 44px: this gets used with
+                  work gloves on. The confirm button keeps the bottom bar's
+                  geometry (rounded-xl / py-3 / text-base = 48px) so the same
+                  primary action reads the same at both ends of the flow. */}
+              <div className="flex items-stretch gap-2">
+                <button
+                  onClick={handleAdd}
+                  disabled={!canAdd}
+                  className={`flex-1 rounded-xl py-3 text-center font-display text-base font-black text-white transition ${
+                    canAdd ? "bg-zinc-900 active:scale-[0.98]" : "bg-zinc-300"
+                  }`}
+                >
+                  {!hasSelection ? "בחרו ציוד לחיבור" : !targetPhase ? "בחרו שקע לחיבור" : `חבר · ${fmt(totalRequested)}A`}
+                </button>
+                {/* Minus first, plus last — same DOM order as the original
+                    quantity card, so the buttons stay where the hand already
+                    expects them (RTL puts plus on the visual left). */}
+                {hasSelection && (
+                  <div className="flex shrink-0 items-center gap-1 rounded-xl bg-zinc-100 px-1">
+                    <button
+                      onClick={() => setQty((q) => Math.max(1, q - 1))}
+                      className="flex h-11 w-11 items-center justify-center rounded-lg text-zinc-900 active:bg-zinc-200"
+                      aria-label="הפחת יחידה"
+                    >
+                      <Minus className="h-5 w-5" />
+                    </button>
+                    <span className="w-6 text-center font-display text-lg font-black tabular-nums">{qty}</span>
+                    <button
+                      onClick={() => setQty((q) => Math.min(50, q + 1))}
+                      className="flex h-11 w-11 items-center justify-center rounded-lg text-zinc-900 active:bg-zinc-200"
+                      aria-label="הוסף יחידה"
+                    >
+                      <Plus className="h-5 w-5" />
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </div>
