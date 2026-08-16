@@ -718,26 +718,33 @@ export default function App() {
     setSelectedItem((cur) => (cur?.key === `s:${name}` ? null : cur));
   }
 
-  // Removing the last unit of a group is destructive and a single mis-tap used
-  // to do it, so it arms first and confirms on a second tap — the same
-  // three-second pattern as "לוח חדש". Stepping a multi-unit group down does
-  // not arm: it is trivially undone with "+", so a confirmation would only be
-  // in the way.
-  function handleGroupRemove(group) {
-    if (group.ids.length > 1) {
-      const last = group.ids[group.ids.length - 1];
-      setDevices((prev) => prev.filter((d) => d.id !== last));
-      return;
-    }
-    if (armedDelete !== group.key) {
-      setArmedDelete(group.key);
+  // Every destructive action in the app goes through here: first tap arms and
+  // shows red, a second tap within three seconds commits, and it disarms
+  // itself otherwise — the same pattern as "לוח חדש". One armed action at a
+  // time app-wide, so arming anything cancels whatever was armed before and
+  // there is never more than one red button waiting to fire.
+  function confirmThenRun(key, run) {
+    if (armedDelete !== key) {
+      setArmedDelete(key);
       clearTimeout(armTimer.current);
       armTimer.current = setTimeout(() => setArmedDelete(null), 3000);
       return;
     }
     clearTimeout(armTimer.current);
     setArmedDelete(null);
-    setDevices((prev) => prev.filter((d) => !group.ids.includes(d.id)));
+    run();
+  }
+
+  // Stepping a multi-unit group down does not arm: it is trivially undone with
+  // "+", so a confirmation would only be in the way. Removing the last unit
+  // destroys the entry, so it does.
+  function handleGroupRemove(group) {
+    if (group.ids.length > 1) {
+      const last = group.ids[group.ids.length - 1];
+      setDevices((prev) => prev.filter((d) => d.id !== last));
+      return;
+    }
+    confirmThenRun(group.key, () => setDevices((prev) => prev.filter((d) => !group.ids.includes(d.id))));
   }
 
   function handleGroupAdd(group) {
@@ -1118,7 +1125,11 @@ export default function App() {
                         >
                           {selected && <CheckCircle2 className="absolute right-1 top-1 h-4 w-4" />}
                           {/* Only the user's own items can be deleted, so there
-                              is no per-item question about what is removable. */}
+                              is no per-item question about what is removable.
+                              Two taps, same as every other destructive action:
+                              this × is small and sits on a tile whose whole
+                              surface is tappable, so a stray thumb was one
+                              press away from wiping a saved machine. */}
                           {item.saved && (
                             <span
                               role="button"
@@ -1126,10 +1137,14 @@ export default function App() {
                               aria-label={`מחק את ${item.name} מהרשימה שלי`}
                               onClick={(e) => {
                                 e.stopPropagation();
-                                deleteSaved(item.name);
+                                confirmThenRun(`saved:${item.name}`, () => deleteSaved(item.name));
                               }}
-                              className={`absolute left-0.5 top-0.5 flex h-6 w-6 items-center justify-center rounded-md ${
-                                selected ? "text-zinc-400" : "text-zinc-300"
+                              className={`absolute left-0.5 top-0.5 flex h-6 w-6 items-center justify-center rounded-md transition ${
+                                armedDelete === `saved:${item.name}`
+                                  ? "bg-red-600 text-white"
+                                  : selected
+                                  ? "text-zinc-400"
+                                  : "text-zinc-300"
                               }`}
                             >
                               <X className="h-3.5 w-3.5" />
