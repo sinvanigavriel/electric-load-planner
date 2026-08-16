@@ -202,6 +202,26 @@ function phaseTotals(devices) {
   return totals;
 }
 
+const WARN_RATIO = 0.85;
+
+const limitState = (value, max) => (value > max ? "over" : value > max * WARN_RATIO ? "warn" : "ok");
+
+// A leg is held back by whichever of its two limits it is closest to — the
+// board rating or its 16A socket MCB — so the binding one is simply the higher
+// ratio, and the leg's status is that limit's status. Naming it matters: a leg
+// at 15A is at 47% of a 32A board but 94% of its MCB, and "close to the limit"
+// without saying WHICH limit sends someone looking at the wrong number.
+function phaseStatus(t, boxMax) {
+  const binding = [
+    { label: "מגבלת הלוח", value: t.total, max: boxMax },
+    { label: "מבטח 16A", value: t.group16, max: 16 },
+  ].reduce((a, b) => (b.value / b.max > a.value / a.max ? b : a));
+  return { level: limitState(binding.value, binding.max), binding };
+}
+
+const joinHe = (arr) =>
+  arr.length <= 1 ? String(arr[0] ?? "") : `${arr.slice(0, -1).join(", ")} ו-${arr[arr.length - 1]}`;
+
 function evaluateAddition(devices, boxMax, phase, totalRequested) {
   const totals = phaseTotals(devices);
   if (phase === "3phase") {
@@ -542,20 +562,37 @@ export default function App() {
   const totals = phaseTotals(devices);
   const threePhaseDevices = devices.filter((d) => d.phase === "3phase");
 
-  const worstLevel = (() => {
-    let level = "ok";
-    [1, 2, 3].forEach((p) => {
-      const t = totals[p];
-      if (t.total > boxMax || t.group16 > 16) level = "over";
-      else if (level !== "over" && (t.total > boxMax * 0.85 || t.group16 > 16 * 0.85)) level = "warn";
-    });
-    return level;
-  })();
+  const phaseStatuses = [1, 2, 3].map((p) => ({ phase: p, ...phaseStatus(totals[p], boxMax) }));
 
-  const alertBanner = {
-    warn: { cls: "bg-amber-500", Icon: AlertTriangle, text: "קרוב לגבול — שימו לב" },
-    over: { cls: "bg-red-600", Icon: AlertTriangle, text: "עומס יתר בלוח!" },
-  }[worstLevel];
+  // The banner used to collapse three legs into one sentence — "קרוב לגבול"
+  // with a full board and two empty legs said nothing actionable and read as
+  // if the whole board were in trouble. It now names the leg, names the limit
+  // it is actually near, and, since the app already knows, says where there IS
+  // room. The per-leg truth still lives on the phase cards; this is a pointer
+  // to the right card, not a second place to read the numbers.
+  const alertBanner = (() => {
+    const hit = (lvl) => phaseStatuses.filter((s) => s.level === lvl);
+    const over = hit("over");
+    const warn = hit("warn");
+    const group = over.length ? over : warn.length ? warn : null;
+    if (!group) return null;
+
+    const isOver = over.length > 0;
+    const verb = isOver ? "מעל" : "קרובה ל";
+    const text =
+      group.length === 1
+        ? `פאזה ${group[0].phase} ${verb}${group[0].binding.label} · ${fmt(group[0].binding.value)} מתוך ${group[0].binding.max}A`
+        : `פאזות ${joinHe(group.map((s) => s.phase))} ${isOver ? "בעומס יתר" : "קרובות לגבול"}`;
+
+    const free = phaseStatuses.filter((s) => s.level === "ok").map((s) => s.phase);
+    const hint = free.length
+      ? free.length === 1
+        ? `יש מקום בפאזה ${free[0]}`
+        : `יש מקום בפאזות ${joinHe(free)}`
+      : null;
+
+    return { cls: isOver ? "bg-red-600" : "bg-amber-500", text, hint };
+  })();
 
   return (
     <div dir="rtl" className="h-[100dvh] flex flex-col overflow-hidden bg-zinc-100 font-body text-zinc-900">
@@ -596,9 +633,12 @@ export default function App() {
 
         {/* Only takes screen space when something actually needs attention */}
         {alertBanner && (
-          <div className={`flex items-center gap-2 px-4 py-2 font-display text-sm font-bold text-white ${alertBanner.cls}`}>
-            <alertBanner.Icon className="h-4 w-4 shrink-0" />
-            <span>{alertBanner.text}</span>
+          <div className={`flex items-start gap-2 px-4 py-2 text-white ${alertBanner.cls}`}>
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+            <div className="min-w-0">
+              <div className="font-display text-sm font-bold">{alertBanner.text}</div>
+              {alertBanner.hint && <div className="font-body text-xs font-medium opacity-90">{alertBanner.hint}</div>}
+            </div>
           </div>
         )}
 
@@ -640,13 +680,32 @@ export default function App() {
           const s = PHASE_STYLE[p];
           const t = totals[p];
           const group16Pct = Math.min((t.group16 / 16) * 100, 100);
-          const group16Over = t.group16 > 16;
           const totalPct = Math.min((t.total / boxMax) * 100, 100);
-          const totalOver = t.total > boxMax;
           const phaseDevices = devices.filter((d) => d.phase === String(p));
 
+          // Per-limit state, so the card can say WHICH of the two is tight
+          // rather than turning the whole card red for either. The headline
+          // chip used to watch only the board, which meant a leg sitting at
+          // 94% of its 16A MCB still showed a calm grey number.
+          const boardState = limitState(t.total, boxMax);
+          const groupState = limitState(t.group16, 16);
+          const cardState = phaseStatuses[p - 1].level;
+
+          // Identity stays on the top strip and the dot; the bars are free to
+          // carry status. "ok" keeps the cable colour so a healthy card still
+          // reads as its physical cable.
+          const fill = (state) =>
+            state === "over" ? "bg-red-600" : state === "warn" ? "bg-amber-500" : s.bar;
+          const labelTone = (state) =>
+            state === "over" ? "text-red-700" : state === "warn" ? "text-amber-700" : "text-zinc-500";
+
           return (
-            <div key={p} className="mb-2 overflow-hidden rounded-2xl border-2 border-zinc-200 bg-white">
+            <div
+              key={p}
+              className={`mb-2 overflow-hidden rounded-2xl border-2 bg-white ${
+                cardState === "over" ? "border-red-400" : cardState === "warn" ? "border-amber-400" : "border-zinc-200"
+              }`}
+            >
               <div className={`h-2 ${s.bar}`} />
               <div className="px-4 py-3">
                 <div className="mb-3 flex items-center justify-between">
@@ -654,25 +713,33 @@ export default function App() {
                     <span className={`h-3 w-3 rounded-full ${s.dot}`} />
                     {s.label} <span className="font-normal text-zinc-400">· {s.sub}</span>
                   </div>
-                  <div className={`rounded-lg px-2 py-1 font-display text-sm font-black ${totalOver ? "bg-red-100 text-red-700" : "bg-zinc-100"}`}>
+                  <div
+                    className={`rounded-lg px-2 py-1 font-display text-sm font-black ${
+                      cardState === "over"
+                        ? "bg-red-100 text-red-700"
+                        : cardState === "warn"
+                        ? "bg-amber-100 text-amber-800"
+                        : "bg-zinc-100"
+                    }`}
+                  >
                     {fmt(t.total)}A
                   </div>
                 </div>
 
-                <div className="mb-1 flex justify-between font-body text-xs font-bold text-zinc-500">
+                <div className={`mb-1 flex justify-between font-body text-xs font-bold ${labelTone(boardState)}`}>
                   <span>סה״כ בפאזה (מגבלת הלוח)</span>
                   <span>{fmt(t.total)} / {boxMax}A</span>
                 </div>
                 <div className="mb-3 h-3 w-full overflow-hidden rounded-full bg-zinc-100">
-                  <div className={`h-full rounded-full ${totalOver ? "bg-red-600" : s.bar}`} style={{ width: `${totalPct}%` }} />
+                  <div className={`h-full rounded-full ${fill(boardState)}`} style={{ width: `${totalPct}%` }} />
                 </div>
 
-                <div className="mb-1 flex justify-between font-body text-xs font-bold text-zinc-500">
+                <div className={`mb-1 flex justify-between font-body text-xs font-bold ${labelTone(groupState)}`}>
                   <span>שקעים רגילים (מבטח 16A)</span>
                   <span>{fmt(t.group16)} / 16A</span>
                 </div>
                 <div className="mb-3 h-3 w-full overflow-hidden rounded-full bg-zinc-100">
-                  <div className={`h-full rounded-full ${group16Over ? "bg-red-600" : s.bar}`} style={{ width: `${group16Pct}%` }} />
+                  <div className={`h-full rounded-full ${fill(groupState)}`} style={{ width: `${group16Pct}%` }} />
                 </div>
 
                 {phaseDevices.length > 0 && (
