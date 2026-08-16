@@ -762,10 +762,14 @@ export default function App() {
                   {evaluation.ok ? evaluation.note : `✕ ${evaluation.reason}`}
                 </div>
               )}
+              {/* Deliberately identical geometry to the bottom bar's "add
+                  equipment" button (rounded-xl / py-3 / text-base = 48px tall):
+                  it's the same primary action at the other end of the flow, so
+                  it should read as the same control, not a bigger one. */}
               <button
                 onClick={handleAdd}
                 disabled={!canAdd}
-                className={`w-full rounded-2xl py-4 text-center font-display text-xl font-black text-white transition ${
+                className={`w-full rounded-xl py-3 text-center font-display text-base font-black text-white transition ${
                   canAdd ? "bg-zinc-900 active:scale-[0.98]" : "bg-zinc-300"
                 }`}
               >
