@@ -37,6 +37,7 @@ import {
   CheckCircle2,
   AlertTriangle,
   RotateCcw,
+  Search,
   X,
 } from "lucide-react";
 
@@ -139,49 +140,73 @@ function useKeyboardInset() {
   return inset;
 }
 
-// Last few devices connected, newest first — a field board is mostly the same
-// three or four machines over and over, so the fastest path to the common case
-// is not searching a catalogue at all. Replayed as the exact original input
-// (a preset by name, a custom load with its original value AND unit) so the
-// electrical maths is identical to typing it again: re-entering 3000W as
-// "13.0A" would silently change how a 3-phase rating gets split.
-const RECENTS_KEY = "elp.recents.v1";
-const MAX_RECENTS = 4;
+// Everything durable lives in localStorage. No accounts, no network: this runs
+// in a field with bad signal, so offline-first is the requirement, not a
+// fallback. Every read is defensive — a corrupt or stale value must degrade to
+// "empty", never crash the app on launch.
+const STORE = {
+  board: "elp.board.v1", // the board being planned right now
+  saved: "elp.saved.v1", // the user's own equipment ("שלי")
+  usage: "elp.usage.v1", // how often each catalogue item gets connected
+};
 
-function loadRecents() {
+function readStore(key, fallback) {
   try {
-    const raw = JSON.parse(localStorage.getItem(RECENTS_KEY));
-    return Array.isArray(raw) ? raw.slice(0, MAX_RECENTS) : [];
+    const raw = JSON.parse(localStorage.getItem(key));
+    return raw ?? fallback;
   } catch {
-    return [];
+    return fallback;
   }
 }
 
-const recentKey = (r) => (r.kind === "preset" ? `p:${r.name}` : `c:${r.value}${r.unit}:${r.name}`);
-
-// Resolves a stored recent back to something displayable. Returns null for
-// entries that no longer resolve — e.g. a preset renamed in a later release —
-// so a stale cache can never crash the sheet.
-function recentInfo(r) {
-  if (r.kind === "preset") {
-    const item = PRESET_CATEGORIES.flatMap((c) => c.items).find((i) => i.name === r.name);
-    return item ? { label: item.name, amps: wattsToAmps(item.watts), Icon: item.Icon } : null;
-  }
-  const v = parseFloat(r.value);
-  if (!(v > 0)) return null;
-  const amps = r.unit === "A" ? v : r.unit === "kW" ? (v * 1000) / VOLTAGE : v / VOLTAGE;
-  return { label: r.name || "עומס מותאם", amps, Icon: Plug };
-}
-
-function saveRecents(list) {
+function writeStore(key, value) {
   try {
-    localStorage.setItem(RECENTS_KEY, JSON.stringify(list.slice(0, MAX_RECENTS)));
+    localStorage.setItem(key, JSON.stringify(value));
   } catch {
-    /* private mode / quota — recents are a convenience, never a requirement */
+    /* private mode / quota — persistence is a convenience, never a requirement */
   }
 }
 
 const wattsToAmps = (w) => w / VOLTAGE;
+
+const unitToAmps = (value, unit) => {
+  const v = parseFloat(value);
+  if (!(v > 0)) return 0;
+  if (unit === "A") return v;
+  if (unit === "kW") return (v * 1000) / VOLTAGE;
+  return v / VOLTAGE;
+};
+
+// One normalised shape for anything connectable, whether it shipped with the
+// app or the user saved it. isPowerBased travels with the item because it
+// changes the electrical maths: a W/kW rating is total power and gets split
+// across the legs of a 3-phase socket, an A rating is already per-line.
+// Collapsing a saved "3000W" down to "13.0A" would silently change that.
+const MINE = "mine";
+
+const BUILTIN_ITEMS = PRESET_CATEGORIES.flatMap((cat, ci) =>
+  cat.items.map((i) => ({
+    key: `b:${i.name}`,
+    name: i.name,
+    amps: wattsToAmps(i.watts),
+    isPowerBased: true,
+    Icon: i.Icon,
+    cat: ci,
+    saved: false,
+  }))
+);
+
+const savedToItem = (s) => ({
+  key: `s:${s.name}`,
+  name: s.name,
+  amps: unitToAmps(s.value, s.unit),
+  isPowerBased: s.unit !== "A",
+  Icon: Plug,
+  cat: MINE,
+  saved: true,
+  value: s.value,
+  unit: s.unit,
+});
 const fmt = (n) => (Math.round(n * 10) / 10).toFixed(1);
 const genId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
@@ -398,23 +423,67 @@ function DebugOverlay() {
 }
 
 export default function App() {
-  const [boxMax, setBoxMax] = useState(32);
-  const [devices, setDevices] = useState([]);
+  // The board survives the app being closed. A half-planned board is real work
+  // — 15 devices split across three legs — and iOS will evict a backgrounded
+  // PWA the moment you take a phone call, which used to wipe it silently.
+  const storedBoard = readStore(STORE.board, null);
+  const [boxMax, setBoxMax] = useState(() => (storedBoard?.boxMax === 63 ? 63 : 32));
+  const [devices, setDevices] = useState(() => (Array.isArray(storedBoard?.devices) ? storedBoard.devices : []));
+  useEffect(() => {
+    writeStore(STORE.board, { boxMax, devices });
+  }, [boxMax, devices]);
 
   const [showAddModal, setShowAddModal] = useState(false);
   const [mode, setMode] = useState("preset"); // "preset" | "custom"
-  const [presetCat, setPresetCat] = useState(0);
-  const [selectedPreset, setSelectedPreset] = useState(null);
+  const [selectedItem, setSelectedItem] = useState(null); // a normalised catalogue item
   const [customValue, setCustomValue] = useState("");
   const [customUnit, setCustomUnit] = useState("W"); // W | kW | A
   const [customName, setCustomName] = useState("");
   const [qty, setQty] = useState(1);
+  const [search, setSearch] = useState("");
   // No default phase — must be picked explicitly every time, so a fast tap
   // never silently lands a device on phase 1 by accident.
   const [targetPhase, setTargetPhase] = useState(null);
 
-  const [recents, setRecents] = useState(loadRecents);
+  const [savedRaw, setSavedRaw] = useState(() => {
+    const v = readStore(STORE.saved, []);
+    return Array.isArray(v) ? v : [];
+  });
+  const [usage, setUsage] = useState(() => {
+    const v = readStore(STORE.usage, {});
+    return v && typeof v === "object" ? v : {};
+  });
   const keyboardInset = useKeyboardInset();
+
+  // The user's own gear comes first — for someone who works with the same
+  // machines every day it IS the catalogue, and the shipped list is the seed.
+  const catalogue = [...savedRaw.map(savedToItem).filter((i) => i.amps > 0), ...BUILTIN_ITEMS];
+  const categories = [
+    ...(savedRaw.length ? [{ id: MINE, label: "שלי" }] : []),
+    ...PRESET_CATEGORIES.map((c, i) => ({ id: i, label: c.label })),
+  ];
+  // Open on "שלי" when the user has their own gear — for someone who works
+  // with the same machines daily that is the only list they need.
+  const [presetCat, setPresetCat] = useState(() => (savedRaw.length ? MINE : 0));
+  // Never leave the chip row pointing at a category that has vanished, which
+  // happens the moment the last saved item is deleted.
+  const activeCat = categories.some((c) => c.id === presetCat) ? presetCat : categories[0].id;
+
+  // Ranked by how often it actually gets connected, not by recency: a one-off
+  // used to push the machine you connect every single day out of the strip.
+  const fastLane = [...catalogue]
+    .filter((i) => usage[i.key]?.count)
+    .sort((a, b) => usage[b.key].count - usage[a.key].count || usage[b.key].last - usage[a.key].last)
+    .slice(0, 6);
+
+  const SEARCH_FROM = 15;
+  const showSearch = catalogue.length >= SEARCH_FROM;
+  const query = search.trim();
+  // While searching, category is irrelevant — the whole point is not having to
+  // remember whether "מכונת עשן" was filed under stage or ventilation.
+  const visibleItems = query
+    ? catalogue.filter((i) => i.name.includes(query))
+    : catalogue.filter((i) => i.cat === activeCat);
 
   const [confirmReset, setConfirmReset] = useState(false);
   const resetTimer = useRef(null);
@@ -459,10 +528,10 @@ export default function App() {
   let deviceName = "";
   let hasSelection = false;
 
-  if (mode === "preset" && selectedPreset) {
-    singleAmps = wattsToAmps(selectedPreset.watts);
-    isPowerBased = true;
-    deviceName = selectedPreset.name;
+  if (mode === "preset" && selectedItem) {
+    singleAmps = selectedItem.amps;
+    isPowerBased = selectedItem.isPowerBased;
+    deviceName = selectedItem.name;
     hasSelection = true;
   } else if (mode === "custom") {
     const v = parseFloat(customValue);
@@ -508,40 +577,65 @@ export default function App() {
     }));
     setDevices((prev) => [...prev, ...newOnes]);
 
-    const entry =
-      mode === "preset" && selectedPreset
-        ? { kind: "preset", name: selectedPreset.name }
-        : { kind: "custom", name: customName.trim(), value: customValue, unit: customUnit };
-    setRecents((prev) => {
-      const next = [entry, ...prev.filter((r) => recentKey(r) !== recentKey(entry))].slice(0, MAX_RECENTS);
-      saveRecents(next);
-      return next;
-    });
+    // A named custom load becomes part of the user's own list. Naming it is
+    // already the signal that it is a real, identifiable machine — nobody
+    // bothers naming a one-off — so this costs no extra tap in the normal
+    // flow. Unnamed loads stay one-offs and are never saved.
+    // Same name means the same machine, so re-entering it with a corrected
+    // rating updates that item instead of creating a duplicate.
+    let key = selectedItem?.key;
+    if (mode === "custom") {
+      const name = customName.trim();
+      if (name) {
+        const entry = { name, value: customValue, unit: customUnit };
+        key = `s:${name}`;
+        setSavedRaw((prev) => {
+          const next = [entry, ...prev.filter((s) => s.name !== name)];
+          writeStore(STORE.saved, next);
+          return next;
+        });
+        // Land on the list the item was just filed into. Saving happens
+        // automatically, so the result has to be visible — otherwise the sheet
+        // stays on the custom form and the new item is somewhere the user
+        // never looked. An unnamed load saves nothing, so it leaves the form
+        // alone: they are probably typing another one-off.
+        setMode("preset");
+        setPresetCat(MINE);
+      } else {
+        key = null;
+      }
+    }
+    if (key) {
+      setUsage((prev) => {
+        const next = { ...prev, [key]: { count: (prev[key]?.count ?? 0) + 1, last: Date.now() } };
+        writeStore(STORE.usage, next);
+        return next;
+      });
+    }
 
-    setSelectedPreset(null);
+    setSelectedItem(null);
     setCustomValue("");
     setCustomName("");
     setQty(1);
     setTargetPhase(null);
   }
 
-  // Puts a recent back into the normal input state rather than bypassing it,
-  // so there is still exactly one path that produces singleAmps.
-  function pickRecent(r) {
-    if (r.kind === "preset") {
-      const ci = PRESET_CATEGORIES.findIndex((c) => c.items.some((i) => i.name === r.name));
-      const item = ci >= 0 ? PRESET_CATEGORIES[ci].items.find((i) => i.name === r.name) : null;
-      if (!item) return;
-      setMode("preset");
-      setPresetCat(ci);
-      setSelectedPreset(item);
-    } else {
-      setMode("custom");
-      setCustomValue(r.value);
-      setCustomUnit(r.unit);
-      setCustomName(r.name);
-    }
+  // Selecting from the fast lane goes through the same state as tapping the
+  // tile itself, so there is still exactly one path that produces singleAmps.
+  function pickItem(item) {
+    setMode("preset");
+    setSearch("");
+    setSelectedItem(item);
     setTargetPhase(null);
+  }
+
+  function deleteSaved(name) {
+    setSavedRaw((prev) => {
+      const next = prev.filter((s) => s.name !== name);
+      writeStore(STORE.saved, next);
+      return next;
+    });
+    setSelectedItem((cur) => (cur?.key === `s:${name}` ? null : cur));
   }
 
   function removeDevice(id) {
@@ -814,23 +908,21 @@ export default function App() {
                   common case should cost one tap, not tab + category + tile.
                   Absent until there is history, so it never costs a first-time
                   user any height. */}
-              {recents.length > 0 && (
+              {fastLane.length > 0 && (
                 <div className="mb-3 flex gap-1.5 overflow-x-auto pb-0.5">
-                  {recents.map((r) => {
-                    const info = recentInfo(r);
-                    if (!info) return null;
-                    const active = info.label === deviceName;
+                  {fastLane.map((item) => {
+                    const active = selectedItem?.key === item.key && mode === "preset";
                     return (
                       <button
-                        key={recentKey(r)}
-                        onClick={() => pickRecent(r)}
+                        key={item.key}
+                        onClick={() => pickItem(item)}
                         className={`flex shrink-0 items-center gap-1.5 rounded-lg border-2 px-2.5 py-1.5 font-body text-xs font-bold transition ${
                           active ? "border-zinc-900 bg-zinc-900 text-white" : "border-zinc-200 bg-white text-zinc-700"
                         }`}
                       >
-                        <info.Icon className="h-3.5 w-3.5 shrink-0" />
-                        <span className="max-w-28 truncate">{info.label}</span>
-                        <span className={active ? "text-zinc-300" : "text-zinc-400"}>{fmt(info.amps)}A</span>
+                        <item.Icon className="h-3.5 w-3.5 shrink-0" />
+                        <span className="max-w-28 truncate">{item.name}</span>
+                        <span className={active ? "text-zinc-300" : "text-zinc-400"}>{fmt(item.amps)}A</span>
                       </button>
                     );
                   })}
@@ -860,43 +952,96 @@ export default function App() {
               {/* Preset grid */}
               {mode === "preset" && (
                 <div className="mb-4 rounded-2xl border-2 border-zinc-200 bg-white p-3">
-                  <div className="mb-3 flex gap-1.5">
-                    {PRESET_CATEGORIES.map((cat, i) => (
-                      <button
-                        key={cat.label}
-                        onClick={() => setPresetCat(i)}
-                        className={`flex-1 rounded-lg py-2 font-body text-xs font-bold transition ${
-                          presetCat === i ? "bg-zinc-900 text-white" : "bg-zinc-100 text-zinc-500"
-                        }`}
-                      >
-                        {cat.label}
-                      </button>
-                    ))}
-                  </div>
+                  {/* Search earns its row only once browsing gets slower than
+                      typing — with 11 items a glance beats a Hebrew keyboard in
+                      the sun. It replaces the category row rather than stacking
+                      on it, because searching across everything is exactly what
+                      makes the category question go away. */}
+                  {showSearch && (
+                    <div className="relative mb-3">
+                      <Search className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
+                      <input
+                        type="text"
+                        value={search}
+                        onChange={(e) => setSearch(e.target.value)}
+                        placeholder="חיפוש ציוד…"
+                        className="w-full rounded-lg border-2 border-zinc-200 bg-zinc-50 py-2 pr-9 ps-9 font-body text-sm focus:border-zinc-900 focus:outline-none"
+                      />
+                      {query && (
+                        <button
+                          onClick={() => setSearch("")}
+                          className="absolute left-2 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md bg-zinc-200 text-zinc-600"
+                          aria-label="נקה חיפוש"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Horizontally scrollable so "שלי" fits alongside the shipped
+                      categories without squeezing the long labels. */}
+                  {!query && (
+                    <div className="mb-3 flex gap-1.5 overflow-x-auto pb-0.5">
+                      {categories.map((cat) => (
+                        <button
+                          key={String(cat.id)}
+                          onClick={() => setPresetCat(cat.id)}
+                          className={`shrink-0 rounded-lg px-3 py-2 font-body text-xs font-bold transition ${
+                            activeCat === cat.id ? "bg-zinc-900 text-white" : "bg-zinc-100 text-zinc-500"
+                          }`}
+                        >
+                          {cat.label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
                   {/* flex-wrap + justify-center, not grid-cols-3: a category
                       with 2 items left an empty third cell that read as a
                       missing tile. Centring the short row says "this category
                       has two" instead. */}
                   <div className="flex flex-wrap justify-center gap-2">
-                    {PRESET_CATEGORIES[presetCat].items.map((item) => {
-                      const selected = selectedPreset?.name === item.name;
-                      const amps = wattsToAmps(item.watts);
-                      const Icon = item.Icon;
+                    {visibleItems.map((item) => {
+                      const selected = selectedItem?.key === item.key;
                       return (
                         <button
-                          key={item.name}
-                          onClick={() => setSelectedPreset(selected ? null : item)}
+                          key={item.key}
+                          onClick={() => setSelectedItem(selected ? null : item)}
                           className={`relative flex min-h-20 flex-[0_0_calc(33.333%-6px)] flex-col items-center justify-center gap-1 rounded-xl border-2 p-2 text-center transition ${
                             selected ? "border-zinc-900 bg-zinc-900 text-white" : "border-zinc-200 bg-zinc-50 text-zinc-800"
                           }`}
                         >
                           {selected && <CheckCircle2 className="absolute right-1 top-1 h-4 w-4" />}
-                          <Icon className="h-6 w-6" />
+                          {/* Only the user's own items can be deleted, so there
+                              is no per-item question about what is removable. */}
+                          {item.saved && (
+                            <span
+                              role="button"
+                              tabIndex={0}
+                              aria-label={`מחק ${item.name}`}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                deleteSaved(item.name);
+                              }}
+                              className={`absolute left-0.5 top-0.5 flex h-6 w-6 items-center justify-center rounded-md ${
+                                selected ? "text-zinc-400" : "text-zinc-300"
+                              }`}
+                            >
+                              <X className="h-3.5 w-3.5" />
+                            </span>
+                          )}
+                          <item.Icon className="h-6 w-6" />
                           <span className="font-body text-xs font-bold leading-tight">{item.name}</span>
-                          <span className={`font-body text-xs ${selected ? "text-zinc-300" : "text-zinc-400"}`}>{fmt(amps)}A</span>
+                          <span className={`font-body text-xs ${selected ? "text-zinc-300" : "text-zinc-400"}`}>{fmt(item.amps)}A</span>
                         </button>
                       );
                     })}
+                    {visibleItems.length === 0 && (
+                      <div className="w-full py-6 text-center font-body text-sm font-bold text-zinc-400">
+                        {query ? `לא נמצא ציוד בשם "${query}"` : "אין כאן ציוד עדיין"}
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
@@ -929,9 +1074,17 @@ export default function App() {
                     type="text"
                     value={customName}
                     onChange={(e) => setCustomName(e.target.value)}
-                    placeholder="שם הציוד (לא חובה)"
+                    placeholder="שם הציוד — יישמר לרשימה שלך"
                     className="w-full rounded-xl border-2 border-zinc-200 bg-zinc-50 p-3 font-body text-base focus:border-zinc-900 focus:outline-none"
                   />
+                  {/* Auto-saving on a name costs no extra tap, but it must not
+                      be invisible — the placeholder and this line say it up
+                      front, so nothing appears in "שלי" unannounced. */}
+                  <div className="mt-2 text-center font-body text-xs font-bold text-zinc-400">
+                    {customName.trim()
+                      ? `יישמר בקטגוריה "שלי" בשם ${customName.trim()}`
+                      : "בלי שם — חיבור חד-פעמי שלא נשמר"}
+                  </div>
                 </div>
               )}
 
