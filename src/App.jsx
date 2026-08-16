@@ -237,9 +237,12 @@ const limitState = (value, max) => (value > max ? "over" : value > max * WARN_RA
 // at 15A is at 47% of a 32A board but 94% of its MCB, and "close to the limit"
 // without saying WHICH limit sends someone looking at the wrong number.
 function phaseStatus(t, boxMax) {
+  // Labels deliberately carry no number: the sentence that uses them already
+  // prints "X מתוך Y A". "מבטח 16A · 15.0 מתוך 16A" put 16A on the line twice,
+  // with a bidi boundary between them, and read as "16A out of 16A".
   const binding = [
     { label: "מגבלת הלוח", value: t.total, max: boxMax },
-    { label: "מבטח 16A", value: t.group16, max: 16 },
+    { label: "מבטח השקעים", value: t.group16, max: 16 },
   ].reduce((a, b) => (b.value / b.max > a.value / a.max ? b : a));
   return { level: limitState(binding.value, binding.max), binding };
 }
@@ -675,7 +678,7 @@ export default function App() {
     const verb = isOver ? "מעל" : "קרובה ל";
     const text =
       group.length === 1
-        ? `פאזה ${group[0].phase} ${verb}${group[0].binding.label} · ${fmt(group[0].binding.value)} מתוך ${group[0].binding.max}A`
+        ? `פאזה ${group[0].phase} ${verb}${group[0].binding.label} — ${fmt(group[0].binding.value)} מתוך ${group[0].binding.max}A`
         : `פאזות ${joinHe(group.map((s) => s.phase))} ${isOver ? "בעומס יתר" : "קרובות לגבול"}`;
 
     const free = phaseStatuses.filter((s) => s.level === "ok").map((s) => s.phase);
