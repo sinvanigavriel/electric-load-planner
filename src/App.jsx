@@ -233,12 +233,20 @@ function InstallCard({ mode, onAction, onDismiss }) {
 // Positions are described vertically only. iOS mirrors its whole UI in RTL
 // locales, so "top right" would be actively wrong on a Hebrew iPad, while
 // "at the top" holds either way.
+// Read the version from Safari's own Version/ token, NOT from the "CPU iPhone
+// OS x_y" token. As of iOS 26 Apple freezes that OS token at 18_6 forever, for
+// privacy — an iPhone on 26.6 still announces "iPhone OS 18_6". Reading it gave
+// every iOS 26 user the pre-26 instructions, which is exactly the bug this
+// replaces. Version/ still tracks the real release (26.0 on iOS 26, 17.6 on
+// iOS 17.6), and each Safari version ships with one iOS release, so it is the
+// dependable signal on every version — old and new alike. This is the same
+// approach UAParser.js adopted for the freeze.
 function iosDetails() {
   const ua = navigator.userAgent;
-  const m = /OS (\d+)[_ ]/.exec(ua);
+  const m = /Version\/(\d+)/.exec(ua);
   return {
-    // null when unknown — an iPad in desktop mode reports a Mac UA with no
-    // iOS version in it, and future UA changes could do the same.
+    // null when unknown: Chrome and Firefox on iOS, and in-app WebViews, carry
+    // no Version/ token at all. Callers must treat null as "assume nothing".
     iosMajor: m ? parseInt(m[1], 10) : null,
     isIpad: /iPad/.test(ua) || isIpadInDesktopMode(ua),
   };
@@ -254,12 +262,16 @@ function installSteps(mode) {
   // a UA we do not recognise, and offering both entry points is the answer
   // that cannot be wrong either way.
   const layoutVaries = iosMajor === null || iosMajor >= 26;
-  const sharePosition = isIpad ? "⬆️ למעלה" : "⬆️ למטה";
 
   const steps = [
     layoutVaries
-      ? { text: "פתחו את תפריט השיתוף", options: [sharePosition, "··· ליד שורת הכתובת"] }
-      : { text: `לחצו על כפתור השיתוף ${sharePosition}` },
+      ? // No position claimed: the 26 layouts move the address bar itself
+        // between top and bottom, so the controls are described by what they
+        // look like, which is the same in every layout.
+        { text: "פתחו את תפריט השיתוף", options: ["⬆️ כפתור השיתוף", "··· ליד שורת הכתובת"] }
+      : // Before 26 the toolbar position is fixed and worth naming: bottom on
+        // iPhone in both of the layouts that existed, top on iPad.
+        { text: `לחצו על כפתור השיתוף ⬆️ ${isIpad ? "למעלה" : "למטה"}` },
     { text: 'גללו ובחרו "הוסף למסך הבית"' },
   ];
 
@@ -771,7 +783,9 @@ function DebugOverlay() {
         padding: "4px 6px",
         direction: "ltr",
         textAlign: "left",
-        whiteSpace: "pre",
+        // pre-wrap, not pre: the user agent line is far wider than a phone.
+        whiteSpace: "pre-wrap",
+        wordBreak: "break-all",
       }}
     >
       {line("html", info.html)}
@@ -797,6 +811,15 @@ function DebugOverlay() {
           ? `YES — ${info.safeTop}px dead strip at bottom`
           : "no"
       }`}
+      {"\n"}
+      {/* What the install promotion decided, and the raw string it decided
+          from. Two rounds of wrong iOS instructions were diagnosed by guessing
+          at a photo; this makes the next one a single screenshot. iosMajor
+          comes from Safari's Version/ token, so it will disagree with the
+          "OS x_y" text below on iOS 26+ — that disagreement is the point. */}
+      {`install:${detectPlatform()} iosMajor:${iosDetails().iosMajor} iPad:${iosDetails().isIpad}`}
+      {"\n"}
+      {`ua:${navigator.userAgent}`}
     </div>
   );
 }
