@@ -212,16 +212,23 @@ function InstallCard({ mode, onAction, onDismiss }) {
   );
 }
 
-// Where "Add to Home Screen" lives has moved more than once, so the steps are
-// picked from the actual iOS major version rather than being written once for
-// whatever version the developer happened to own:
+// Where "Add to Home Screen" lives depends on the iOS version AND, from 26, on
+// a per-user setting:
 //
-//   iOS 26+   Safari dropped the visible Share button in the Liquid Glass
-//             redesign. It is now ··· next to the address bar, then Share.
-//             The Add dialog also gained an "Open as Web App" toggle, and any
-//             site can be added as a web app now, so that toggle decides
-//             whether you get an app or a plain bookmark.
-//   iOS ≤ 25  A Share button in the toolbar: bottom on iPhone, top on iPad.
+//   iOS ≤ 25  A Share button in the toolbar — bottom on iPhone, top on iPad.
+//             There is exactly one way in, so the step says so plainly.
+//   iOS 26+   Safari gained three toolbar layouts (Settings > Safari > Tabs).
+//             "Compact", the default, hides Share behind ··· next to the
+//             address bar; "Bottom" and "Top" keep a visible Share button.
+//             Nothing about that choice reaches the page — no API, no media
+//             query, an identical user agent — so two people on the very same
+//             26.6 see different controls and NEITHER answer is safe to
+//             assume. The step therefore names both entry points and lets the
+//             user glance at their own screen, which costs them nothing and
+//             cannot be wrong.
+//             26 also added an "Open as Web App" toggle to the Add dialog, and
+//             since any site can now be added, that toggle is what decides
+//             whether the result is an app or a plain bookmark.
 //
 // Positions are described vertically only. iOS mirrors its whole UI in RTL
 // locales, so "top right" would be actively wrong on a Hebrew iPad, while
@@ -238,28 +245,39 @@ function iosDetails() {
 }
 
 function installSteps(mode) {
-  if (mode === "mac-safari") return ["פתחו את התפריט קובץ", 'בחרו "הוסף ל-Dock"', 'לחצו "הוסף"'];
+  if (mode === "mac-safari") {
+    return { steps: [{ text: "פתחו את התפריט קובץ" }, { text: 'בחרו "הוסף ל-Dock"' }, { text: 'לחצו "הוסף"' }] };
+  }
 
   const { iosMajor, isIpad } = iosDetails();
-  const finish = ['גללו ובחרו "הוסף למסך הבית"'];
+  // Unknown version is treated as modern: it means an iPad in desktop mode or
+  // a UA we do not recognise, and offering both entry points is the answer
+  // that cannot be wrong either way.
+  const layoutVaries = iosMajor === null || iosMajor >= 26;
+  const sharePosition = isIpad ? "⬆️ למעלה" : "⬆️ למטה";
 
-  if (iosMajor === null) {
-    // Unknown version: name both entry points rather than guess one.
-    return [...['לחצו על כפתור השיתוף ⬆️, או על ··· ליד שורת הכתובת'], ...finish, 'לחצו "הוסף"'];
-  }
-  if (iosMajor >= 26) {
-    return [
-      'לחצו על ··· ליד שורת הכתובת, ואז על "שיתוף"',
-      ...finish,
-      'ודאו ש"פתח כאפליקציית אינטרנט" מופעל',
-      'לחצו "הוסף"',
-    ];
-  }
-  return [
-    isIpad ? "לחצו על כפתור השיתוף ⬆️ למעלה" : "לחצו על כפתור השיתוף ⬆️ למטה",
-    ...finish,
-    'לחצו "הוסף"',
+  const steps = [
+    layoutVaries
+      ? { text: "פתחו את תפריט השיתוף", options: [sharePosition, "··· ליד שורת הכתובת"] }
+      : { text: `לחצו על כפתור השיתוף ${sharePosition}` },
+    { text: 'גללו ובחרו "הוסף למסך הבית"' },
   ];
+
+  if (layoutVaries) {
+    steps.push({
+      text:
+        iosMajor === null
+          ? 'אם מופיע מתג "פתח כאפליקציית אינטרנט" — ודאו שהוא מופעל'
+          : 'ודאו ש"פתח כאפליקציית אינטרנט" מופעל',
+    });
+  }
+  steps.push({ text: 'לחצו "הוסף"' });
+
+  return {
+    steps,
+    // Only offered where the setting actually exists.
+    footnote: iosMajor !== null && iosMajor >= 26 ? "לא רואים אף אחד מהם? הגדרות ← Safari ← לשוניות" : null,
+  };
 }
 
 function InstallSheet({ mode, headerHeight, keyboardInset, onClose, onNeverShow }) {
@@ -274,7 +292,7 @@ function InstallSheet({ mode, headerHeight, keyboardInset, onClose, onNeverShow 
     }
   }
 
-  const steps = installSteps(mode);
+  const { steps, footnote } = installSteps(mode);
 
   return (
     <div
@@ -308,14 +326,32 @@ function InstallSheet({ mode, headerHeight, keyboardInset, onClose, onNeverShow 
 
           <ol className="mb-3 space-y-2">
             {steps.map((s, i) => (
-              <li key={s} className="flex items-center gap-3 rounded-2xl border-2 border-zinc-200 bg-white px-3 py-3">
-                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-zinc-900 font-display text-sm font-black text-white">
-                  {i + 1}
-                </span>
-                <span className="font-body text-sm font-bold">{s}</span>
+              <li key={s.text} className="rounded-2xl border-2 border-zinc-200 bg-white px-3 py-3">
+                <div className="flex items-center gap-3">
+                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-zinc-900 font-display text-sm font-black text-white">
+                    {i + 1}
+                  </span>
+                  <span className="font-body text-sm font-bold">{s.text}</span>
+                </div>
+                {/* Two entry points side by side rather than a guess: the user
+                    glances at their own Safari and takes whichever they have. */}
+                {s.options && (
+                  <div className="mt-2 flex flex-wrap items-center gap-2 pr-10">
+                    {s.options.map((o, k) => (
+                      <React.Fragment key={o}>
+                        {k > 0 && <span className="font-body text-xs text-zinc-400">או</span>}
+                        <span className="rounded-lg bg-zinc-100 px-2.5 py-1.5 font-body text-xs font-bold text-zinc-700">
+                          {o}
+                        </span>
+                      </React.Fragment>
+                    ))}
+                  </div>
+                )}
               </li>
             ))}
           </ol>
+
+          {footnote && <div className="mb-3 text-center font-body text-xs text-zinc-500">{footnote}</div>}
 
           {/* Always present, whatever the detection decided. iOS browser
               detection cannot be made reliable, so a wrong guess in either
