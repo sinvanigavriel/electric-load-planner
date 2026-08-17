@@ -38,6 +38,8 @@ import {
   AlertTriangle,
   RotateCcw,
   Search,
+  Download,
+  Copy,
   X,
 } from "lucide-react";
 
@@ -78,6 +80,220 @@ const PHASE_STYLE = {
   3: { chipBg: "bg-cable-black", dot: "bg-cable-black", bar: "bg-cable-black", label: "פאזה 3", sub: "כבל שחור", short: "L3" },
 };
 const THREE_PHASE_STYLE = { chipBg: "bg-cable-red", dot: "bg-cable-red", bar: "bg-cable-red", label: "תלת פאזי", sub: "שקע אדום 32A", short: "3F" };
+
+// ---------------------------------------------------------------------------
+// Install promotion
+//
+// Built capability-first: beforeinstallprompt IS the detection. If it fired,
+// the browser has already decided the app is installable, so Android and
+// desktop Chromium are handled without inspecting the user agent at all.
+// UA sniffing is confined to iOS, and there only to choose which instructions
+// to print — never to decide whether installing is possible.
+//
+// That matters because iOS cannot be detected reliably: every iOS browser is
+// WebKit, and SFSafariViewController (what opens from WhatsApp, Telegram and
+// friends) deliberately drops "Safari" and "Version/" from its UA, so it is
+// indistinguishable from a plain WebView. Rather than chase that, the iOS
+// sheet always carries a copy-link escape, so a wrong guess in either
+// direction still leaves the user with a way through.
+const INSTALL_DISMISSED_KEY = "elp.installDismissed.v1";
+
+function isRunningInstalled() {
+  return (
+    ["standalone", "fullscreen", "minimal-ui"].some((m) => window.matchMedia(`(display-mode: ${m})`).matches) ||
+    window.navigator.standalone === true // iOS-only, predates display-mode
+  );
+}
+
+function detectPlatform() {
+  const ua = navigator.userAgent;
+  // maxTouchPoints catches an iPad in desktop mode, which otherwise reports
+  // itself as a Mac and would get the wrong instructions entirely.
+  const iOS = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  if (iOS) {
+    const otherBrowser = /CriOS|FxiOS|EdgiOS|OPiOS/.test(ua);
+    // Real Safari ships both tokens; WebViews and SFSafariViewController drop
+    // "Version/". Treated as a hint for wording only.
+    const looksLikeSafari = /Safari/.test(ua) && /Version\//.test(ua);
+    return otherBrowser || !looksLikeSafari ? "ios-other" : "ios-safari";
+  }
+  const macSafari =
+    /Macintosh/.test(ua) && /Safari/.test(ua) && /Version\//.test(ua) && !/Chrome|Chromium|Edg\//.test(ua);
+  return macSafari ? "mac-safari" : "other";
+}
+
+// mode: "none" | "prompt" | "ios-safari" | "ios-other" | "mac-safari"
+function useInstallState() {
+  const [hasPrompt, setHasPrompt] = useState(() => !!window.__installPrompt);
+  const [installed, setInstalled] = useState(isRunningInstalled);
+  const [dismissed, setDismissed] = useState(() => readStore(INSTALL_DISMISSED_KEY, false) === true);
+
+  useEffect(() => {
+    const sync = () => {
+      setHasPrompt(!!window.__installPrompt);
+      setInstalled(isRunningInstalled());
+    };
+    window.addEventListener("installability-change", sync);
+    const mq = window.matchMedia("(display-mode: standalone)");
+    mq.addEventListener?.("change", sync);
+    return () => {
+      window.removeEventListener("installability-change", sync);
+      mq.removeEventListener?.("change", sync);
+    };
+  }, []);
+
+  const platform = detectPlatform();
+  let mode = "none";
+  if (!installed && !dismissed) {
+    if (hasPrompt) mode = "prompt";
+    else if (platform === "ios-safari" || platform === "ios-other" || platform === "mac-safari") mode = platform;
+    // "other" without a prompt means Firefox or a browser that cannot install.
+    // Deliberately silent: better to show nothing than to promise something
+    // that will not happen.
+  }
+
+  function dismiss() {
+    writeStore(INSTALL_DISMISSED_KEY, true);
+    setDismissed(true);
+  }
+
+  // prompt() is single-use. Once spent the event must be dropped; Chromium
+  // fires a fresh one later if the user declined.
+  async function runPrompt() {
+    const e = window.__installPrompt;
+    if (!e) return;
+    window.__installPrompt = null;
+    setHasPrompt(false);
+    try {
+      await e.prompt();
+      await e.userChoice;
+    } catch {
+      /* the browser refused to show it; appinstalled or a later event decides */
+    }
+  }
+
+  return { mode, dismiss, runPrompt };
+}
+
+function InstallCard({ mode, onAction, onDismiss }) {
+  // Black, like the primary action button — the app's language is white cards
+  // holding data, so this says "action, not a reading" at a glance. Sits at the
+  // top of the scrolling list rather than in the header: it is the first thing
+  // seen on an empty board, but it costs zero fixed height and scrolls away
+  // instead of permanently shrinking the add-equipment sheet.
+  return (
+    <div className="mb-2 flex items-center gap-3 rounded-2xl bg-zinc-900 px-4 py-3 text-white">
+      <Download className="h-6 w-6 shrink-0" />
+      <div className="min-w-0 flex-1">
+        <div className="font-display text-base font-black">התקינו את האפליקציה</div>
+        {/* One line at 393px. The title already implies the home screen, so
+            this carries the benefit that actually matters in a field. */}
+        <div className="font-body text-xs text-zinc-400">עובדת גם בלי קליטה</div>
+      </div>
+      <button
+        onClick={onAction}
+        className="shrink-0 rounded-xl bg-white px-4 py-2 font-display text-sm font-black text-zinc-900 transition active:scale-[0.98]"
+      >
+        {mode === "prompt" ? "התקנה" : "איך?"}
+      </button>
+      <button
+        onClick={onDismiss}
+        className="-mr-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-zinc-500"
+        aria-label="אל תציגו שוב"
+      >
+        <X className="h-4 w-4" />
+      </button>
+    </div>
+  );
+}
+
+function InstallSheet({ mode, headerHeight, keyboardInset, onClose, onNeverShow }) {
+  const [copied, setCopied] = useState(false);
+  async function copyLink() {
+    try {
+      await navigator.clipboard.writeText(window.location.href);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      /* clipboard blocked — the address is on screen anyway */
+    }
+  }
+
+  const steps =
+    mode === "mac-safari"
+      ? ["פתחו את התפריט קובץ", 'בחרו "הוסף ל-Dock"', 'לחצו "הוסף"']
+      : ["לחצו על כפתור השיתוף ⬆️", 'גללו ובחרו "הוסף למסך הבית"', 'לחצו "הוסף"'];
+
+  return (
+    <div
+      className="fixed inset-x-0 z-40 flex items-end justify-center"
+      style={{ top: headerHeight, bottom: keyboardInset }}
+    >
+      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
+      <div className="relative flex max-h-full w-full max-w-md flex-col overflow-hidden rounded-t-3xl bg-zinc-100 shadow-2xl">
+        <div className="flex shrink-0 items-center justify-between border-b-2 border-zinc-900 bg-white px-4 py-3">
+          <span className="font-display text-lg font-black">
+            {mode === "mac-safari" ? "הוספה ל-Dock" : "התקנה על האייפון"}
+          </span>
+          <button
+            onClick={onClose}
+            className="flex h-9 w-9 items-center justify-center rounded-lg bg-zinc-100 text-zinc-600 active:bg-zinc-200"
+            aria-label="סגור"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-none px-4 pb-4 pt-3">
+          {mode === "ios-other" && (
+            <div className="mb-3 rounded-2xl border-2 border-amber-400 bg-amber-50 px-4 py-3">
+              <div className="font-display text-sm font-black text-amber-900">נראה שאתם לא ב-Safari</div>
+              <div className="mt-1 font-body text-xs font-bold text-amber-800">
+                אפל מאפשרת התקנה רק מ-Safari עצמו. העתיקו את הקישור ופתחו אותו שם.
+              </div>
+            </div>
+          )}
+
+          <ol className="mb-3 space-y-2">
+            {steps.map((s, i) => (
+              <li key={s} className="flex items-center gap-3 rounded-2xl border-2 border-zinc-200 bg-white px-3 py-3">
+                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-zinc-900 font-display text-sm font-black text-white">
+                  {i + 1}
+                </span>
+                <span className="font-body text-sm font-bold">{s}</span>
+              </li>
+            ))}
+          </ol>
+
+          {/* Always present, whatever the detection decided. iOS browser
+              detection cannot be made reliable, so a wrong guess in either
+              direction must still leave a way through. */}
+          {mode !== "mac-safari" && (
+            <button
+              onClick={copyLink}
+              className="mb-2 flex w-full items-center justify-center gap-2 rounded-xl border-2 border-zinc-300 bg-white py-3 font-display text-sm font-black text-zinc-700 transition active:scale-[0.98]"
+            >
+              <Copy className="h-4 w-4" />
+              {copied ? "הקישור הועתק ✓" : mode === "ios-other" ? "העתיקו את הקישור" : "לא ב-Safari? העתיקו קישור"}
+            </button>
+          )}
+        </div>
+
+        <div className="shrink-0 border-t-2 border-zinc-900 bg-white px-4 pb-[max(0.5rem,env(safe-area-inset-bottom,0px))] pt-2">
+          {/* On iOS an installed app gets storage isolated from Safari, so the
+              browser tab never learns the install happened and would keep
+              promoting it. This is the only way to silence it. */}
+          <button
+            onClick={onNeverShow}
+            className="w-full rounded-xl bg-zinc-900 py-3 text-center font-display text-base font-black text-white transition active:scale-[0.98]"
+          >
+            הבנתי — אל תציגו שוב
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 // Tracks an element's BORDER-box height. Two things here are deliberate and
 // both were needed to make safe-area padding behave:
@@ -530,6 +746,9 @@ export default function App() {
   });
   const keyboardInset = useKeyboardInset();
 
+  const install = useInstallState();
+  const [showInstallSheet, setShowInstallSheet] = useState(false);
+
   // The user's own gear comes first — for someone who works with the same
   // machines every day it IS the catalogue, and the shipped list is the seed.
   const catalogue = [...savedRaw.map(savedToItem).filter((i) => i.amps > 0), ...BUILTIN_ITEMS];
@@ -860,6 +1079,14 @@ export default function App() {
             needs a small breathing gap on top of it — not the old magic
             constant, which left ~24px of dead scroll below the last card. */}
         <div className="mx-auto max-w-md px-4 pt-4" style={{ paddingBottom: bottomBarHeight + 16 }}>
+        {install.mode !== "none" && (
+          <InstallCard
+            mode={install.mode}
+            onAction={() => (install.mode === "prompt" ? install.runPrompt() : setShowInstallSheet(true))}
+            onDismiss={install.dismiss}
+          />
+        )}
+
         {threePhaseDevices.length > 0 && (
           <div className="mb-2 rounded-2xl border-2 border-red-200 bg-white px-4 py-3">
             <div className="mb-2 flex items-center gap-2 font-display text-sm font-black text-red-600">
@@ -991,6 +1218,19 @@ export default function App() {
           הוספת ציוד
         </button>
       </div>
+
+      {showInstallSheet && install.mode !== "none" && install.mode !== "prompt" && (
+        <InstallSheet
+          mode={install.mode}
+          headerHeight={headerHeight}
+          keyboardInset={keyboardInset}
+          onClose={() => setShowInstallSheet(false)}
+          onNeverShow={() => {
+            setShowInstallSheet(false);
+            install.dismiss();
+          }}
+        />
+      )}
 
       {/* Add-equipment bottom sheet — bounded to the area below the header,
           and at the bottom by the keyboard rather than pinned to 0 (see
