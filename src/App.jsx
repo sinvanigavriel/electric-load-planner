@@ -105,11 +105,16 @@ function isRunningInstalled() {
   );
 }
 
+const isIpadInDesktopMode = (ua) => /Macintosh/.test(ua) && navigator.maxTouchPoints > 1;
+
 function detectPlatform() {
   const ua = navigator.userAgent;
-  // maxTouchPoints catches an iPad in desktop mode, which otherwise reports
-  // itself as a Mac and would get the wrong instructions entirely.
-  const iOS = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  // An iPad in desktop mode sends a Mac user agent, and would otherwise be
+  // handed the "File > Add to Dock" instructions, which do not exist on it.
+  // A real Mac reports maxTouchPoints 0 — including one with a Touch Bar — so
+  // a touch-capable "Macintosh" is an iPad. Uses maxTouchPoints rather than
+  // the deprecated navigator.platform, and is checked before the Mac branch.
+  const iOS = /iPad|iPhone|iPod/.test(ua) || isIpadInDesktopMode(ua);
   if (iOS) {
     const otherBrowser = /CriOS|FxiOS|EdgiOS|OPiOS/.test(ua);
     // Real Safari ships both tokens; WebViews and SFSafariViewController drop
@@ -207,6 +212,56 @@ function InstallCard({ mode, onAction, onDismiss }) {
   );
 }
 
+// Where "Add to Home Screen" lives has moved more than once, so the steps are
+// picked from the actual iOS major version rather than being written once for
+// whatever version the developer happened to own:
+//
+//   iOS 26+   Safari dropped the visible Share button in the Liquid Glass
+//             redesign. It is now ··· next to the address bar, then Share.
+//             The Add dialog also gained an "Open as Web App" toggle, and any
+//             site can be added as a web app now, so that toggle decides
+//             whether you get an app or a plain bookmark.
+//   iOS ≤ 25  A Share button in the toolbar: bottom on iPhone, top on iPad.
+//
+// Positions are described vertically only. iOS mirrors its whole UI in RTL
+// locales, so "top right" would be actively wrong on a Hebrew iPad, while
+// "at the top" holds either way.
+function iosDetails() {
+  const ua = navigator.userAgent;
+  const m = /OS (\d+)[_ ]/.exec(ua);
+  return {
+    // null when unknown — an iPad in desktop mode reports a Mac UA with no
+    // iOS version in it, and future UA changes could do the same.
+    iosMajor: m ? parseInt(m[1], 10) : null,
+    isIpad: /iPad/.test(ua) || isIpadInDesktopMode(ua),
+  };
+}
+
+function installSteps(mode) {
+  if (mode === "mac-safari") return ["פתחו את התפריט קובץ", 'בחרו "הוסף ל-Dock"', 'לחצו "הוסף"'];
+
+  const { iosMajor, isIpad } = iosDetails();
+  const finish = ['גללו ובחרו "הוסף למסך הבית"'];
+
+  if (iosMajor === null) {
+    // Unknown version: name both entry points rather than guess one.
+    return [...['לחצו על כפתור השיתוף ⬆️, או על ··· ליד שורת הכתובת'], ...finish, 'לחצו "הוסף"'];
+  }
+  if (iosMajor >= 26) {
+    return [
+      'לחצו על ··· ליד שורת הכתובת, ואז על "שיתוף"',
+      ...finish,
+      'ודאו ש"פתח כאפליקציית אינטרנט" מופעל',
+      'לחצו "הוסף"',
+    ];
+  }
+  return [
+    isIpad ? "לחצו על כפתור השיתוף ⬆️ למעלה" : "לחצו על כפתור השיתוף ⬆️ למטה",
+    ...finish,
+    'לחצו "הוסף"',
+  ];
+}
+
 function InstallSheet({ mode, headerHeight, keyboardInset, onClose, onNeverShow }) {
   const [copied, setCopied] = useState(false);
   async function copyLink() {
@@ -219,10 +274,7 @@ function InstallSheet({ mode, headerHeight, keyboardInset, onClose, onNeverShow 
     }
   }
 
-  const steps =
-    mode === "mac-safari"
-      ? ["פתחו את התפריט קובץ", 'בחרו "הוסף ל-Dock"', 'לחצו "הוסף"']
-      : ["לחצו על כפתור השיתוף ⬆️", 'גללו ובחרו "הוסף למסך הבית"', 'לחצו "הוסף"'];
+  const steps = installSteps(mode);
 
   return (
     <div
